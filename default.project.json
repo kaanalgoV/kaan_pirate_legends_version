@@ -1,0 +1,29 @@
+{
+  "name": "PirateLegends",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "Shared": {
+        "$path": "src/shared"
+      },
+      "Remotes": {
+        "$path": "src/remotes"
+      }
+    },
+    "StarterGui": {
+      "$path": "src/gui"
+    },
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "ClientBootstrap": {
+          "$path": "src/client"
+        }
+      }
+    },
+    "ServerScriptService": {
+      "ServerBootstrap": {
+        "$path": "src/server"
+      }
+    }
+  }
+}

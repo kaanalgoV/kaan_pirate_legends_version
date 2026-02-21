@@ -1,0 +1,7 @@
+.env
+*.rbxl
+*.rbxlx
+*.rbxm
+node_modules/
+tools/output/
+.DS_Store

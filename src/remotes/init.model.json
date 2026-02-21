@@ -1,0 +1,21 @@
+{
+  "ClassName": "Folder",
+  "Children": [
+    { "Name": "Combat", "ClassName": "RemoteEvent" },
+    { "Name": "CombatResult", "ClassName": "RemoteEvent" },
+    { "Name": "Ability", "ClassName": "RemoteEvent" },
+    { "Name": "AbilityVFX", "ClassName": "RemoteEvent" },
+    { "Name": "Block", "ClassName": "RemoteEvent" },
+    { "Name": "HakiToggle", "ClassName": "RemoteEvent" },
+    { "Name": "HakiState", "ClassName": "RemoteEvent" },
+    { "Name": "HakiDodge", "ClassName": "RemoteEvent" },
+    { "Name": "PlayerState", "ClassName": "RemoteEvent" },
+    { "Name": "StateSync", "ClassName": "RemoteEvent" },
+    { "Name": "ArenaJoin", "ClassName": "RemoteEvent" },
+    { "Name": "ArenaStart", "ClassName": "RemoteEvent" },
+    { "Name": "ArenaEnd", "ClassName": "RemoteEvent" },
+    { "Name": "GachaPull", "ClassName": "RemoteEvent" },
+    { "Name": "GachaResult", "ClassName": "RemoteEvent" },
+    { "Name": "GetPlayerData", "ClassName": "RemoteFunction" }
+  ]
+}
