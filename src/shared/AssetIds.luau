@@ -16,8 +16,8 @@ AssetIds.Market = 108916967223267
 -- VFX / Combat models
 AssetIds.HakiAura = 124381342472188
 AssetIds.LightBeam = 75195165065108
-AssetIds.LightKick = 0 -- pending, will be updated
-AssetIds.JewelsOfLight = 0 -- pending, will be updated
+AssetIds.LightKick = 135476037266859
+AssetIds.JewelsOfLight = 93689852497503
 AssetIds.YataMirror = 123979533815086
 AssetIds.DivineBeam = 113645524793436
 AssetIds.LightBarrage = 109589380174395
