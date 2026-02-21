@@ -5,10 +5,10 @@ local Players = game:GetService("Players")
 
 local Enums = require(ReplicatedStorage.Shared.Enums)
 
-local Remotes = ReplicatedStorage.Remotes
-local ArenaJoin = Remotes.ArenaJoin
-local ArenaStart = Remotes.ArenaStart
-local ArenaEnd = Remotes.ArenaEnd
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+local ArenaJoin = Remotes:WaitForChild("ArenaJoin")
+local ArenaStart = Remotes:WaitForChild("ArenaStart")
+local ArenaEnd = Remotes:WaitForChild("ArenaEnd")
 
 local PlayerStateService -- forward ref
 
@@ -190,7 +190,22 @@ function ArenaService.endMatch(matchId: string, winner: Player?)
 	local match = activeMatches[matchId]
 	if not match then return end
 
-	for _, p in match.players or {} do
+	-- Collect all players from both match types
+	local allPlayers: { Player } = {}
+	if match.type == "1v1" then
+		for _, p in match.players or {} do
+			table.insert(allPlayers, p)
+		end
+	elseif match.type == "3v3" then
+		for _, p in match.team1 or {} do
+			table.insert(allPlayers, p)
+		end
+		for _, p in match.team2 or {} do
+			table.insert(allPlayers, p)
+		end
+	end
+
+	for _, p in allPlayers do
 		if p and p.Parent then
 			PlayerStateService.respawn(p)
 			ArenaEnd:FireClient(p, {

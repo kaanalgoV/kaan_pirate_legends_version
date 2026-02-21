@@ -2,18 +2,128 @@
   "name": "PirateLegends",
   "tree": {
     "$className": "DataModel",
+    "Workspace": {
+      "$className": "Workspace",
+      "$properties": {
+        "Gravity": 196.2
+      },
+      "Baseplate": {
+        "$className": "Part",
+        "$properties": {
+          "Size": [512, 4, 512],
+          "Position": [0, -2, 0],
+          "Anchored": true,
+          "Color": [0.29, 0.59, 0.29],
+          "Material": "Grass",
+          "TopSurface": "Smooth",
+          "BottomSurface": "Smooth"
+        }
+      },
+      "Ocean": {
+        "$className": "Part",
+        "$properties": {
+          "Size": [2048, 1, 2048],
+          "Position": [0, -3, 0],
+          "Anchored": true,
+          "Color": [0.05, 0.25, 0.5],
+          "Material": "Water",
+          "Transparency": 0.3,
+          "TopSurface": "Smooth",
+          "BottomSurface": "Smooth"
+        }
+      },
+      "SpawnLocation": {
+        "$className": "SpawnLocation",
+        "$properties": {
+          "Size": [8, 1, 8],
+          "Position": [0, 1, 50],
+          "Anchored": true,
+          "Color": [0.9, 0.85, 0.55],
+          "Material": "SmoothPlastic",
+          "TopSurface": "Smooth",
+          "BottomSurface": "Smooth",
+          "Duration": 0
+        }
+      },
+      "ArenaFloor_1v1": {
+        "$className": "Part",
+        "$properties": {
+          "Size": [40, 2, 40],
+          "Position": [110, -1, 0],
+          "Anchored": true,
+          "Color": [0.35, 0.15, 0.15],
+          "Material": "Cobblestone",
+          "TopSurface": "Smooth"
+        }
+      },
+      "ArenaFloor_3v3": {
+        "$className": "Part",
+        "$properties": {
+          "Size": [60, 2, 40],
+          "Position": [215, -1, 0],
+          "Anchored": true,
+          "Color": [0.15, 0.15, 0.35],
+          "Material": "Cobblestone",
+          "TopSurface": "Smooth"
+        }
+      }
+    },
+    "Lighting": {
+      "$className": "Lighting",
+      "$properties": {
+        "Ambient": [0.3, 0.3, 0.35],
+        "OutdoorAmbient": [0.4, 0.4, 0.45],
+        "Brightness": 2,
+        "ClockTime": 14,
+        "GeographicLatitude": 20,
+        "EnvironmentDiffuseScale": 1,
+        "EnvironmentSpecularScale": 1
+      },
+      "Atmosphere": {
+        "$className": "Atmosphere",
+        "$properties": {
+          "Density": 0.3,
+          "Offset": 0.25,
+          "Color": [0.7, 0.8, 1.0],
+          "Decay": [0.9, 0.9, 1.0],
+          "Glare": 0,
+          "Haze": 2
+        }
+      },
+      "Sky": {
+        "$className": "Sky"
+      },
+      "Bloom": {
+        "$className": "BloomEffect",
+        "$properties": {
+          "Intensity": 0.5,
+          "Size": 24,
+          "Threshold": 0.8
+        }
+      },
+      "ColorCorrection": {
+        "$className": "ColorCorrectionEffect",
+        "$properties": {
+          "Brightness": 0.05,
+          "Contrast": 0.1,
+          "Saturation": 0.15
+        }
+      }
+    },
     "ReplicatedStorage": {
       "Shared": {
         "$path": "src/shared"
-      },
-      "Remotes": {
-        "$path": "src/remotes"
       }
     },
     "StarterGui": {
-      "$path": "src/gui"
+      "$className": "StarterGui"
     },
     "StarterPlayer": {
+      "$className": "StarterPlayer",
+      "$properties": {
+        "CameraMaxZoomDistance": 40,
+        "CameraMinZoomDistance": 5
+      },
       "StarterPlayerScripts": {
         "ClientBootstrap": {
           "$path": "src/client"
@@ -23,6 +133,12 @@
     "ServerScriptService": {
       "ServerBootstrap": {
         "$path": "src/server"
+      }
+    },
+    "SoundService": {
+      "$className": "SoundService",
+      "$properties": {
+        "RespectFilteringEnabled": true
       }
     }
   }

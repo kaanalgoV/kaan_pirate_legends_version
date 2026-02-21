@@ -19,8 +19,26 @@ local FLY_SPEED_BOOST = 120
 local TURN_SPEED = 3
 
 function WaverController.init()
-	-- Waver model is expected in ReplicatedStorage.Assets.Waver
-	-- For now, we create a simple placeholder if not found
+	-- Clean up waver on character death/removal
+	player.CharacterAdded:Connect(function()
+		if isRiding then
+			WaverController.dismount()
+		end
+	end)
+
+	player.CharacterRemoving:Connect(function()
+		if isRiding then
+			-- Force cleanup without trying to modify humanoid
+			isRiding = false
+			if updateConnection then
+				updateConnection:Disconnect()
+				updateConnection = nil
+			end
+			if bodyVelocity then bodyVelocity:Destroy() bodyVelocity = nil end
+			if bodyGyro then bodyGyro:Destroy() bodyGyro = nil end
+			if waverModel then waverModel:Destroy() waverModel = nil end
+		end
+	end)
 end
 
 function WaverController.toggle()

@@ -8,10 +8,10 @@ local HakiConfig = require(ReplicatedStorage.Shared.HakiConfig)
 local Enums = require(ReplicatedStorage.Shared.Enums)
 local Util = require(ReplicatedStorage.Shared.Util)
 
-local Remotes = ReplicatedStorage.Remotes
-local HakiToggle = Remotes.HakiToggle
-local HakiState = Remotes.HakiState
-local HakiDodge = Remotes.HakiDodge
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+local HakiToggle = Remotes:WaitForChild("HakiToggle")
+local HakiState = Remotes:WaitForChild("HakiState")
+local HakiDodge = Remotes:WaitForChild("HakiDodge")
 
 local PlayerStateService -- forward ref
 

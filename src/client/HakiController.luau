@@ -5,13 +5,14 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local HakiConfig = require(ReplicatedStorage.Shared.HakiConfig)
 
-local Remotes = ReplicatedStorage.Remotes
-local HakiToggle = Remotes.HakiToggle
-local HakiState = Remotes.HakiState
-local HakiDodge = Remotes.HakiDodge
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+local HakiToggle = Remotes:WaitForChild("HakiToggle")
+local HakiState = Remotes:WaitForChild("HakiState")
+local HakiDodge = Remotes:WaitForChild("HakiDodge")
 
 local VFXUtil -- set in init
 local InputController -- set in init
+local SoundController -- set in init
 
 local HakiController = {}
 
@@ -19,9 +20,10 @@ local player = Players.LocalPlayer
 local hakiActive = false
 local auras: { [number, Part] } = {}
 
-function HakiController.init(vfxUtil, inputCtrl)
+function HakiController.init(vfxUtil, inputCtrl, soundCtrl)
 	VFXUtil = vfxUtil
 	InputController = inputCtrl
+	SoundController = soundCtrl
 
 	-- Local haki state response
 	HakiState.OnClientEvent:Connect(function(data)
@@ -29,6 +31,14 @@ function HakiController.init(vfxUtil, inputCtrl)
 			-- Direct response to our toggle
 			hakiActive = data
 			HakiController.updateLocalAura()
+			-- Sound feedback
+			if SoundController then
+				if data then
+					SoundController.play("Haki_Activate")
+				else
+					SoundController.play("Haki_Deactivate")
+				end
+			end
 		elseif type(data) == "table" and data.playerId then
 			-- Other player's haki state
 			HakiController.updateOtherAura(data.playerId, data.active)
@@ -78,6 +88,11 @@ function HakiController.onDodge()
 	-- Instant local VFX
 	if VFXUtil and player.Character then
 		VFXUtil.createDodgeAfterimage(player.Character, HakiConfig.DODGE_AFTERIMAGE_COLOR)
+	end
+
+	-- Sound
+	if SoundController then
+		SoundController.play("Haki_Dodge")
 	end
 end
 

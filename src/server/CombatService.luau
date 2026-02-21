@@ -1,4 +1,5 @@
 -- CombatService.luau — Server-authoritative M1 combat + ability execution
+-- Supports: Beam, DashHit, AoE, Buff, MultiHit, Grab, Projectile, Zone
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
@@ -10,14 +11,9 @@ local HakiConfig = require(ReplicatedStorage.Shared.HakiConfig)
 local Enums = require(ReplicatedStorage.Shared.Enums)
 local Util = require(ReplicatedStorage.Shared.Util)
 
-local Remotes = ReplicatedStorage.Remotes
-local CombatRemote = Remotes.Combat
-local CombatResult = Remotes.CombatResult
-local AbilityRemote = Remotes.Ability
-local AbilityVFX = Remotes.AbilityVFX
-local BlockRemote = Remotes.Block
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 
-local PlayerStateService -- forward declaration, set in init
+local PlayerStateService -- forward declaration
 
 local CombatService = {}
 
@@ -28,6 +24,10 @@ local abilityCooldowns: { [Player]: { [number]: number } } = {}
 
 function CombatService.init(psService)
 	PlayerStateService = psService
+
+	local CombatRemote = Remotes:WaitForChild("Combat")
+	local AbilityRemote = Remotes:WaitForChild("Ability")
+	local BlockRemote = Remotes:WaitForChild("Block")
 
 	CombatRemote.OnServerEvent:Connect(function(player, data)
 		CombatService.handleM1(player, data)
@@ -49,6 +49,7 @@ function CombatService.handleBlock(player: Player, blocking: boolean)
 	if blocking then
 		if state.Flag == Enums.PlayerFlag.HITSTUN then return end
 		if state.Flag == Enums.PlayerFlag.GUARD_BROKEN then return end
+		if state.Flag == Enums.PlayerFlag.GRABBED then return end
 		if state.Guard <= 0 then return end
 		PlayerStateService.setFlag(player, Enums.PlayerFlag.BLOCKING)
 	else
@@ -72,7 +73,6 @@ function CombatService.handleM1(player: Player, data: any)
 
 	local character = player.Character
 	if not Util.isAlive(character) then return end
-
 	local rootPart = Util.getRootPart(character)
 	if not rootPart then return end
 
@@ -91,8 +91,22 @@ function CombatService.handleM1(player: Player, data: any)
 	comboTracker[player] = combo
 
 	local comboIndex = combo.index
-	local baseDamage = CombatConfig.COMBO_DAMAGE[comboIndex] or 30
-	local hitstun = CombatConfig.COMBO_HITSTUN[comboIndex] or 0.25
+
+	-- Get damage values (check awakening custom M1)
+	local baseDamage, hitstun
+	if state.Awakened and state.EquippedFruit then
+		local awakening = FruitConfig.getAwakening(state.EquippedFruit)
+		if awakening and awakening.CustomM1 then
+			local m1 = awakening.CustomM1
+			baseDamage = m1.BaseDamage[comboIndex] or 30
+			hitstun = m1.Hitstun[comboIndex] or 0.25
+		end
+	end
+
+	if not baseDamage then
+		baseDamage = CombatConfig.COMBO_DAMAGE[comboIndex] or 30
+		hitstun = CombatConfig.COMBO_HITSTUN[comboIndex] or 0.25
+	end
 
 	-- Haki damage boost
 	if state.HakiActive then
@@ -103,14 +117,19 @@ function CombatService.handleM1(player: Player, data: any)
 	local origin = rootPart.CFrame
 	local target = CombatService.findTarget(player, origin, CombatConfig.COMBO_RANGE, CombatConfig.COMBO_ANGLE)
 
+	local CombatResult = Remotes:FindFirstChild("CombatResult")
 	if not target then
-		CombatResult:FireClient(player, { hit = false, comboIndex = comboIndex })
+		if CombatResult then
+			CombatResult:FireClient(player, { hit = false, comboIndex = comboIndex })
+		end
 		return
 	end
 
 	local targetPlayer = Players:GetPlayerFromCharacter(target)
 	if not targetPlayer then
-		CombatResult:FireClient(player, { hit = false, comboIndex = comboIndex })
+		if CombatResult then
+			CombatResult:FireClient(player, { hit = false, comboIndex = comboIndex })
+		end
 		return
 	end
 
@@ -166,16 +185,17 @@ function CombatService.handleM1(player: Player, data: any)
 				bv.Velocity = kbForce
 				bv.MaxForce = Vector3.new(1e5, 1e5, 1e5)
 				bv.Parent = targetRoot
-				task.delay(0.3, function()
-					bv:Destroy()
-				end)
+				task.delay(0.3, function() bv:Destroy() end)
 			end
 		end
 	end
 
-	-- Haki XP
-	if state.HakiActive then
-		-- handled by HakiService
+	-- Awakening meter gain
+	local FruitConfigLocal = FruitConfig
+	if FruitConfigLocal.AwakeningMeter then
+		if not state.Awakened then
+			state.AwakeningMeter = (state.AwakeningMeter or 0) + FruitConfigLocal.AwakeningMeter.HIT_DEALT_GAIN
+		end
 	end
 
 	-- XP
@@ -184,25 +204,44 @@ function CombatService.handleM1(player: Player, data: any)
 	-- Check death
 	if targetState.HP <= 0 then
 		PlayerStateService.addXP(player, Config.XP_PER_KILL)
+		PlayerStateService.addKill(player)
+		PlayerStateService.addGems(player, 10)
 	end
 
-	CombatResult:FireClient(player, {
-		hit = true,
-		comboIndex = comboIndex,
-		damage = actualDamage,
-		blocked = blocked,
-		guardBroken = guardBroken,
-		targetId = targetPlayer.UserId,
-	})
+	-- Notify clients
+	if CombatResult then
+		CombatResult:FireClient(player, {
+			hit = true,
+			comboIndex = comboIndex,
+			damage = actualDamage,
+			blocked = blocked,
+			guardBroken = guardBroken,
+			targetId = targetPlayer.UserId,
+		})
 
-	CombatResult:FireClient(targetPlayer, {
-		hit = true,
-		wasHit = true,
-		damage = actualDamage,
-		blocked = blocked,
-		guardBroken = guardBroken,
-		attackerId = player.UserId,
-	})
+		CombatResult:FireClient(targetPlayer, {
+			hit = true,
+			wasHit = true,
+			damage = actualDamage,
+			blocked = blocked,
+			guardBroken = guardBroken,
+			attackerId = player.UserId,
+		})
+	end
+
+	-- Broadcast damage number
+	local DamageNumber = Remotes:FindFirstChild("DamageNumber")
+	if DamageNumber then
+		local targetRoot = Util.getRootPart(target)
+		if targetRoot then
+			DamageNumber:FireAllClients({
+				position = targetRoot.Position + Vector3.new(0, 3, 0),
+				damage = math.floor(actualDamage),
+				blocked = blocked,
+				crit = comboIndex == CombatConfig.COMBO_LENGTH,
+			})
+		end
+	end
 end
 
 function CombatService.handleAbility(player: Player, data: any)
@@ -212,6 +251,7 @@ function CombatService.handleAbility(player: Player, data: any)
 	if not state then return end
 	if state.Flag == Enums.PlayerFlag.DEAD then return end
 	if state.Flag == Enums.PlayerFlag.HITSTUN then return end
+	if state.Flag == Enums.PlayerFlag.GRABBED then return end
 
 	local character = player.Character
 	if not Util.isAlive(character) then return end
@@ -224,6 +264,7 @@ function CombatService.handleAbility(player: Player, data: any)
 	local fruitId = state.EquippedFruit
 	if not fruitId then return end
 
+	-- Get ability data (check awakening first)
 	local abilityData
 	if state.Awakened then
 		local awakening = FruitConfig.getAwakening(fruitId)
@@ -240,6 +281,11 @@ function CombatService.handleAbility(player: Player, data: any)
 		abilityData = FruitConfig.getAbility(fruitId, slot)
 	end
 	if not abilityData then return end
+
+	-- Level check
+	if not state.Awakened and abilityData.UnlockLevel then
+		if state.Level < abilityData.UnlockLevel then return end
+	end
 
 	-- Cooldown check
 	local now = tick()
@@ -260,6 +306,7 @@ function CombatService.handleAbility(player: Player, data: any)
 	local mode = abilityData.Mode
 	local cursorPos = data.cursorPos or (rootPart.Position + rootPart.CFrame.LookVector * 30)
 
+	-- Execute ability by mode
 	if mode == Enums.AbilityMode.BEAM then
 		CombatService.executeBeam(player, rootPart, abilityData, damage, cursorPos)
 	elseif mode == Enums.AbilityMode.DASH_HIT then
@@ -270,19 +317,33 @@ function CombatService.handleAbility(player: Player, data: any)
 		CombatService.executeBuff(player, rootPart, abilityData, cursorPos)
 	elseif mode == Enums.AbilityMode.MULTI_HIT then
 		CombatService.executeMultiHit(player, rootPart, abilityData, damage)
+	elseif mode == Enums.AbilityMode.GRAB then
+		CombatService.executeGrab(player, rootPart, abilityData, damage)
+	elseif mode == Enums.AbilityMode.PROJECTILE then
+		CombatService.executeProjectile(player, rootPart, abilityData, damage, cursorPos)
+	elseif mode == Enums.AbilityMode.ZONE then
+		CombatService.executeZone(player, rootPart, abilityData, damage, cursorPos)
 	end
 
-	-- Broadcast VFX
-	AbilityVFX:FireAllClients({
-		casterId = player.UserId,
-		slot = slot,
-		fruitId = fruitId,
-		mode = mode,
-		origin = rootPart.Position,
-		direction = rootPart.CFrame.LookVector,
-		cursorPos = cursorPos,
-		awakened = state.Awakened,
-	})
+	-- Awakening meter gain
+	if not state.Awakened and FruitConfig.AwakeningMeter then
+		state.AwakeningMeter = (state.AwakeningMeter or 0) + FruitConfig.AwakeningMeter.ABILITY_USED_GAIN
+	end
+
+	-- Broadcast VFX to all clients
+	local AbilityVFX = Remotes:FindFirstChild("AbilityVFX")
+	if AbilityVFX then
+		AbilityVFX:FireAllClients({
+			casterId = player.UserId,
+			slot = slot,
+			fruitId = fruitId,
+			mode = mode,
+			origin = rootPart.Position,
+			direction = rootPart.CFrame.LookVector,
+			cursorPos = cursorPos,
+			awakened = state.Awakened,
+		})
+	end
 
 	task.delay(0.8, function()
 		if PlayerStateService.getFlag(player) == Enums.PlayerFlag.ATTACKING then
@@ -290,6 +351,10 @@ function CombatService.handleAbility(player: Player, data: any)
 		end
 	end)
 end
+
+-- ═══════════════════════════════════════════════════════════════
+-- ABILITY EXECUTION MODES
+-- ═══════════════════════════════════════════════════════════════
 
 function CombatService.executeBeam(player, rootPart, ability, damage, cursorPos)
 	local origin = rootPart.CFrame
@@ -324,28 +389,15 @@ function CombatService.executeDashHit(player, rootPart, ability, damage, cursorP
 	local direction = (cursorPos - rootPart.Position).Unit
 	local range = ability.Range or 30
 
-	-- Move player forward
 	local targetPos = rootPart.Position + direction * range
 	rootPart.CFrame = CFrame.new(targetPos, targetPos + direction)
 
-	-- Hit in front
 	local hitTarget = CombatService.findTarget(player, rootPart.CFrame, 10, 90)
 	if hitTarget then
 		local targetPlayer = Players:GetPlayerFromCharacter(hitTarget)
 		if targetPlayer then
 			CombatService.applyAbilityDamage(player, targetPlayer, damage, ability)
-
-			if ability.KnockbackForce then
-				local targetRoot = Util.getRootPart(hitTarget)
-				if targetRoot then
-					local kbDir = direction
-					local bv = Instance.new("BodyVelocity")
-					bv.Velocity = kbDir * ability.KnockbackForce + Vector3.new(0, 20, 0)
-					bv.MaxForce = Vector3.new(1e5, 1e5, 1e5)
-					bv.Parent = targetRoot
-					task.delay(0.3, function() bv:Destroy() end)
-				end
-			end
+			CombatService.applyKnockback(hitTarget, direction, ability.KnockbackForce or 40)
 		end
 	end
 end
@@ -367,6 +419,10 @@ function CombatService.executeAoE(player, rootPart, ability, damage, cursorPos)
 
 				if Util.distance(otherRoot.Position, center) <= radius then
 					CombatService.applyAbilityDamage(player, otherPlayer, damage, ability)
+					if ability.KnockbackForce then
+						local kbDir = (otherRoot.Position - center).Unit
+						CombatService.applyKnockback(otherChar, kbDir, ability.KnockbackForce)
+					end
 				end
 			end
 		end)
@@ -374,9 +430,6 @@ function CombatService.executeAoE(player, rootPart, ability, damage, cursorPos)
 end
 
 function CombatService.executeBuff(player, rootPart, ability, cursorPos)
-	local state = PlayerStateService.getState(player)
-	if not state then return end
-
 	if ability.TeleportDistance then
 		local direction = (cursorPos - rootPart.Position).Unit
 		local dist = math.min(ability.TeleportDistance, Util.distance(cursorPos, rootPart.Position))
@@ -415,15 +468,7 @@ function CombatService.executeMultiHit(player, rootPart, ability, damage)
 					CombatService.applyAbilityDamage(player, targetPlayer, damage, ability)
 
 					if i == hitCount and ability.FinalKnockback then
-						local targetRoot = Util.getRootPart(target)
-						if targetRoot then
-							local kbDir = root.CFrame.LookVector
-							local bv = Instance.new("BodyVelocity")
-							bv.Velocity = kbDir * ability.FinalKnockback + Vector3.new(0, 30, 0)
-							bv.MaxForce = Vector3.new(1e5, 1e5, 1e5)
-							bv.Parent = targetRoot
-							task.delay(0.3, function() bv:Destroy() end)
-						end
+						CombatService.applyKnockback(target, root.CFrame.LookVector, ability.FinalKnockback)
 					end
 				end
 			end
@@ -431,13 +476,138 @@ function CombatService.executeMultiHit(player, rootPart, ability, damage)
 	end
 end
 
+function CombatService.executeGrab(player, rootPart, ability, damage)
+	local target = CombatService.findTarget(player, rootPart.CFrame, ability.Range or 10, 70)
+	if not target then return end
+
+	local targetPlayer = Players:GetPlayerFromCharacter(target)
+	if not targetPlayer then return end
+
+	local targetState = PlayerStateService.getState(targetPlayer)
+	if not targetState then return end
+
+	-- Can't grab someone who is blocking (unless GuardBreak)
+	if targetState.Flag == Enums.PlayerFlag.BLOCKING and not ability.GuardBreak then
+		return
+	end
+
+	-- Grab the target
+	PlayerStateService.setFlag(targetPlayer, Enums.PlayerFlag.GRABBED)
+
+	local targetRoot = Util.getRootPart(target)
+	if targetRoot then
+		-- Pull target to attacker
+		targetRoot.CFrame = rootPart.CFrame * CFrame.new(0, 0, -3)
+	end
+
+	-- Hold and slam after duration
+	local grabDuration = ability.GrabDuration or 1.0
+	task.delay(grabDuration, function()
+		if PlayerStateService.getFlag(targetPlayer) == Enums.PlayerFlag.GRABBED then
+			-- Apply damage
+			CombatService.applyAbilityDamage(player, targetPlayer, damage, ability)
+
+			-- Slam down
+			if targetRoot and targetRoot.Parent then
+				local slamForce = ability.SlamForce or 60
+				local bv = Instance.new("BodyVelocity")
+				bv.Velocity = Vector3.new(0, -slamForce, 0) + rootPart.CFrame.LookVector * (slamForce * 0.5)
+				bv.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+				bv.Parent = targetRoot
+				task.delay(0.4, function() bv:Destroy() end)
+			end
+
+			PlayerStateService.setFlag(targetPlayer, Enums.PlayerFlag.HITSTUN)
+			task.delay(1.0, function()
+				if PlayerStateService.getFlag(targetPlayer) == Enums.PlayerFlag.HITSTUN then
+					PlayerStateService.setFlag(targetPlayer, Enums.PlayerFlag.IDLE)
+				end
+			end)
+		end
+	end)
+end
+
+function CombatService.executeProjectile(player, rootPart, ability, damage, cursorPos)
+	local direction = (cursorPos - rootPart.Position).Unit
+	local range = ability.Range or 60
+	local speed = 80
+	local projectileTime = range / speed
+
+	-- Check hits along trajectory
+	task.delay(projectileTime * 0.5, function()
+		local midPoint = rootPart.Position + direction * (range * 0.5)
+		local explosionRadius = ability.ExplosionRadius or 8
+
+		for _, otherPlayer in Players:GetPlayers() do
+			if otherPlayer == player then continue end
+			local otherChar = otherPlayer.Character
+			if not otherChar or not Util.isAlive(otherChar) then continue end
+			local otherRoot = Util.getRootPart(otherChar)
+			if not otherRoot then continue end
+
+			-- Check along the beam path
+			local toTarget = otherRoot.Position - rootPart.Position
+			local projLen = toTarget:Dot(direction)
+			if projLen >= 0 and projLen <= range then
+				local perpDist = (toTarget - direction * projLen).Magnitude
+				if perpDist <= explosionRadius then
+					CombatService.applyAbilityDamage(player, otherPlayer, damage, ability)
+				end
+			end
+		end
+	end)
+end
+
+function CombatService.executeZone(player, rootPart, ability, damage, cursorPos)
+	local center = cursorPos
+	local radius = ability.Radius or 20
+	local duration = ability.ZoneDuration or 3.0
+	local tickInterval = 0.5
+	local totalTicks = math.floor(duration / tickInterval)
+	local damagePerTick = damage / totalTicks
+
+	for i = 1, totalTicks do
+		task.delay((i - 1) * tickInterval, function()
+			for _, otherPlayer in Players:GetPlayers() do
+				if otherPlayer == player then continue end
+				local otherChar = otherPlayer.Character
+				if not otherChar or not Util.isAlive(otherChar) then continue end
+				local otherRoot = Util.getRootPart(otherChar)
+				if not otherRoot then continue end
+
+				if Util.distance(otherRoot.Position, center) <= radius then
+					CombatService.applyAbilityDamage(player, otherPlayer, damagePerTick, ability)
+				end
+			end
+		end)
+	end
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- SHARED HELPERS
+-- ═══════════════════════════════════════════════════════════════
+
 function CombatService.applyAbilityDamage(attacker: Player, target: Player, damage: number, ability: any)
 	local targetState = PlayerStateService.getState(target)
 	if not targetState then return end
 
-	if targetState.Flag == Enums.PlayerFlag.BLOCKING then
+	local isBlocking = targetState.Flag == Enums.PlayerFlag.BLOCKING
+	local guardBreak = ability.GuardBreak == true
+
+	if isBlocking and not guardBreak then
+		-- Reduced damage, guard takes hit
 		damage = damage * (1 - CombatConfig.BLOCK_DAMAGE_REDUCTION)
 		PlayerStateService.applyGuardDamage(target, damage)
+	elseif isBlocking and guardBreak then
+		-- Guard break: full damage + break guard
+		PlayerStateService.applyDamage(target, damage)
+		targetState.Guard = 0
+		PlayerStateService.setFlag(target, Enums.PlayerFlag.GUARD_BROKEN)
+		task.delay(CombatConfig.GUARD_BREAK_STUN, function()
+			if PlayerStateService.getFlag(target) == Enums.PlayerFlag.GUARD_BROKEN then
+				PlayerStateService.setFlag(target, Enums.PlayerFlag.IDLE)
+			end
+		end)
 	else
 		PlayerStateService.applyDamage(target, damage)
 		if ability.Hitstun then
@@ -450,9 +620,40 @@ function CombatService.applyAbilityDamage(attacker: Player, target: Player, dama
 		end
 	end
 
+	-- Kill tracking
 	if targetState.HP <= 0 then
 		PlayerStateService.addXP(attacker, Config.XP_PER_KILL)
+		PlayerStateService.addKill(attacker)
+		PlayerStateService.addGems(attacker, 10)
 	end
+
+	-- Damage number broadcast
+	local DamageNumber = Remotes:FindFirstChild("DamageNumber")
+	if DamageNumber then
+		local targetChar = target.Character
+		if targetChar then
+			local targetRoot = Util.getRootPart(targetChar)
+			if targetRoot then
+				DamageNumber:FireAllClients({
+					position = targetRoot.Position + Vector3.new(0, 3, 0),
+					damage = math.floor(damage),
+					blocked = isBlocking and not guardBreak,
+					guardBreak = guardBreak and isBlocking,
+				})
+			end
+		end
+	end
+end
+
+function CombatService.applyKnockback(character: Model, direction: Vector3, force: number)
+	local targetRoot = Util.getRootPart(character)
+	if not targetRoot then return end
+
+	local bv = Instance.new("BodyVelocity")
+	bv.Velocity = direction * force + Vector3.new(0, 20, 0)
+	bv.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+	bv.Parent = targetRoot
+	task.delay(0.3, function() bv:Destroy() end)
 end
 
 function CombatService.findTarget(player: Player, origin: CFrame, range: number, angle: number): Model?

@@ -1,13 +1,17 @@
--- MovementController.luau — Sprint, Dash, Geppo (air jump), Soru (teleport dash)
+-- MovementController.luau — Sprint, Dash, Geppo (air jump), Soru, Directional Dodge
+-- Q = Rasur links, E = Rasur rechts
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 
 local Config = require(ReplicatedStorage.Shared.Config)
+local HakiConfig = require(ReplicatedStorage.Shared.HakiConfig)
 
 local VFXUtil -- set in init
 local InputController -- set in init
+local HudController -- set in init
+local SoundController -- set in init
 
 local MovementController = {}
 
@@ -18,11 +22,17 @@ local soruCooldown = 0
 local geppoSteps = 0
 local lastGroundTime = 0
 
-function MovementController.init(vfxUtil, inputCtrl)
+local DODGE_DISTANCE = 14
+local DODGE_COOLDOWN = 1.0
+
+local lastDodgeTime = 0
+
+function MovementController.init(vfxUtil, inputCtrl, hudCtrl, soundCtrl)
 	VFXUtil = vfxUtil
 	InputController = inputCtrl
+	HudController = hudCtrl
+	SoundController = soundCtrl
 
-	-- Track grounded state
 	player.CharacterAdded:Connect(function(character)
 		local humanoid = character:WaitForChild("Humanoid")
 		geppoSteps = 0
@@ -31,6 +41,9 @@ function MovementController.init(vfxUtil, inputCtrl)
 			if newState == Enum.HumanoidStateType.Landed then
 				geppoSteps = 0
 				lastGroundTime = tick()
+				if HudController then
+					HudController.updateGeppoDots(0)
+				end
 			end
 		end)
 	end)
@@ -50,31 +63,67 @@ function MovementController.onSprint(active: boolean)
 	end
 end
 
-function MovementController.onDash()
+function MovementController.onDodgeLeft()
+	MovementController.dodge("left")
+end
+
+function MovementController.onDodgeRight()
+	MovementController.dodge("right")
+end
+
+function MovementController.dodge(direction: string)
 	local now = tick()
-	if now - dashCooldown < Config.DASH_COOLDOWN then return end
-	dashCooldown = now
+	if now - lastDodgeTime < DODGE_COOLDOWN then return end
+	lastDodgeTime = now
 
 	local character = player.Character
 	if not character then return end
 	local rootPart = character:FindFirstChild("HumanoidRootPart")
 	if not rootPart then return end
 
-	local moveDir = Vector3.zero
+	-- Calculate dodge direction relative to camera
+	local dodgeDir: Vector3
 	if InputController then
-		moveDir = InputController.getMovementDirection()
-	end
-	if moveDir.Magnitude < 0.1 then
-		moveDir = rootPart.CFrame.LookVector
+		if direction == "left" then
+			dodgeDir = InputController.getLeftDodgeDirection()
+		else
+			dodgeDir = InputController.getRightDodgeDirection()
+		end
+	else
+		local camera = workspace.CurrentCamera
+		if camera then
+			local right = camera.CFrame.RightVector
+			if direction == "left" then
+				dodgeDir = Vector3.new(-right.X, 0, -right.Z).Unit
+			else
+				dodgeDir = Vector3.new(right.X, 0, right.Z).Unit
+			end
+		else
+			dodgeDir = direction == "left" and Vector3.new(-1, 0, 0) or Vector3.new(1, 0, 0)
+		end
 	end
 
 	local startPos = rootPart.Position
-	local dashDist = 18
-	rootPart.CFrame = rootPart.CFrame + moveDir * dashDist
+	rootPart.CFrame = rootPart.CFrame + dodgeDir * DODGE_DISTANCE
+
+	-- Fire to server for Haki dodge (gives i-frames if Haki active)
+	local Remotes = ReplicatedStorage:FindFirstChild("Remotes")
+	if Remotes then
+		local HakiDodge = Remotes:FindFirstChild("HakiDodge")
+		if HakiDodge then
+			HakiDodge:FireServer(dodgeDir)
+		end
+	end
 
 	-- VFX
 	if VFXUtil then
 		VFXUtil.createDashTrail(startPos, rootPart.Position, Color3.fromRGB(200, 200, 255))
+		VFXUtil.createDodgeAfterimage(character, HakiConfig.DODGE_AFTERIMAGE_COLOR)
+	end
+
+	-- Sound
+	if SoundController then
+		SoundController.play("Dash")
 	end
 end
 
@@ -89,6 +138,16 @@ function MovementController.onGeppo()
 	-- Only in air
 	if humanoid:GetState() == Enum.HumanoidStateType.Freefall then
 		if geppoSteps >= Config.GEPPO_MAX_STEPS then return end
+
+		-- Notify server about resolve cost (server validates)
+		local Remotes = ReplicatedStorage:FindFirstChild("Remotes")
+		if Remotes then
+			local PlayerState = Remotes:FindFirstChild("PlayerState")
+			if PlayerState then
+				PlayerState:FireServer({ action = "geppo" })
+			end
+		end
+
 		geppoSteps = geppoSteps + 1
 
 		-- Air jump
@@ -100,9 +159,19 @@ function MovementController.onGeppo()
 			if bv and bv.Parent then bv:Destroy() end
 		end)
 
-		-- VFX — small cloud burst
+		-- VFX
 		if VFXUtil then
 			VFXUtil.burstParticles(rootPart.Position - Vector3.new(0, 3, 0), Color3.fromRGB(220, 220, 255), 6)
+		end
+
+		-- Sound
+		if SoundController then
+			SoundController.play("Geppo")
+		end
+
+		-- Update HUD dots
+		if HudController then
+			HudController.updateGeppoDots(geppoSteps)
 		end
 	end
 end
@@ -116,6 +185,15 @@ function MovementController.onSoru()
 	if not character then return end
 	local rootPart = character:FindFirstChild("HumanoidRootPart")
 	if not rootPart then return end
+
+	-- Notify server about resolve cost
+	local Remotes = ReplicatedStorage:FindFirstChild("Remotes")
+	if Remotes then
+		local PlayerState = Remotes:FindFirstChild("PlayerState")
+		if PlayerState then
+			PlayerState:FireServer({ action = "soru" })
+		end
+	end
 
 	local moveDir = Vector3.zero
 	if InputController then
@@ -132,6 +210,11 @@ function MovementController.onSoru()
 	if VFXUtil then
 		VFXUtil.createTeleportFlash(startPos, Color3.fromRGB(200, 200, 255))
 		VFXUtil.createTeleportFlash(rootPart.Position, Color3.fromRGB(200, 200, 255))
+	end
+
+	-- Sound
+	if SoundController then
+		SoundController.play("Soru")
 	end
 end
 

@@ -1,11 +1,11 @@
 -- InputController.luau — Central input binding and routing
+-- Q = Rasur links, E = Rasur rechts, H = Haki Toggle
 
 local UserInputService = game:GetService("UserInputService")
-local ContextActionService = game:GetService("ContextActionService")
 
 local InputController = {}
 
-local bindings: { [string]: () -> () } = {}
+local bindings: { [string]: any } = {}
 local heldKeys: { [Enum.KeyCode]: boolean } = {}
 
 function InputController.init(callbacks: {
@@ -13,12 +13,13 @@ function InputController.init(callbacks: {
 	onBlock: (boolean) -> (),
 	onAbility: (number) -> (),
 	onHakiToggle: () -> (),
-	onHakiDodge: () -> (),
+	onDodgeLeft: () -> (),
+	onDodgeRight: () -> (),
 	onSprint: (boolean) -> (),
-	onDash: () -> (),
 	onGeppo: () -> (),
 	onSoru: () -> (),
 	onWaver: () -> (),
+	onAwaken: (() -> ())?,
 })
 	bindings = callbacks
 
@@ -55,10 +56,28 @@ function InputController.handleInput(input: InputObject, pressed: boolean)
 		return
 	end
 
+	-- Sprint (LeftShift hold)
+	if key == Enum.KeyCode.LeftShift then
+		if bindings.onSprint then bindings.onSprint(pressed) end
+		return
+	end
+
 	if not pressed then return end
 
+	-- Q = Rasur LINKS (dodge left)
+	if key == Enum.KeyCode.Q then
+		if bindings.onDodgeLeft then bindings.onDodgeLeft() end
+
+	-- E = Rasur RECHTS (dodge right)
+	elseif key == Enum.KeyCode.E then
+		if bindings.onDodgeRight then bindings.onDodgeRight() end
+
+	-- H = Haki Toggle
+	elseif key == Enum.KeyCode.H then
+		if bindings.onHakiToggle then bindings.onHakiToggle() end
+
 	-- Abilities (1-6)
-	if key == Enum.KeyCode.One then
+	elseif key == Enum.KeyCode.One then
 		if bindings.onAbility then bindings.onAbility(1) end
 	elseif key == Enum.KeyCode.Two then
 		if bindings.onAbility then bindings.onAbility(2) end
@@ -71,38 +90,21 @@ function InputController.handleInput(input: InputObject, pressed: boolean)
 	elseif key == Enum.KeyCode.Six then
 		if bindings.onAbility then bindings.onAbility(6) end
 
-	-- Haki (H)
-	elseif key == Enum.KeyCode.H then
-		if bindings.onHakiToggle then bindings.onHakiToggle() end
-
-	-- Haki Dodge (Q)
-	elseif key == Enum.KeyCode.Q then
-		if bindings.onHakiDodge then bindings.onHakiDodge() end
-
-	-- Sprint (LeftShift hold)
-	elseif key == Enum.KeyCode.LeftShift then
-		if bindings.onSprint then bindings.onSprint(true) end
-
-	-- Dash (E)
-	elseif key == Enum.KeyCode.E then
-		if bindings.onDash then bindings.onDash() end
-
-	-- Geppo / Double-Jump (Space in air)
+	-- Geppo / Air Jump (Space in air)
 	elseif key == Enum.KeyCode.Space then
 		if bindings.onGeppo then bindings.onGeppo() end
 
-	-- Soru (V)
+	-- Soru (V = teleport dash)
 	elseif key == Enum.KeyCode.V then
 		if bindings.onSoru then bindings.onSoru() end
 
-	-- Waver (U)
+	-- Waver (U = cloud surfer)
 	elseif key == Enum.KeyCode.U then
 		if bindings.onWaver then bindings.onWaver() end
-	end
 
-	-- Sprint release
-	if key == Enum.KeyCode.LeftShift and not pressed then
-		if bindings.onSprint then bindings.onSprint(false) end
+	-- Awakening (T = transformation toggle)
+	elseif key == Enum.KeyCode.T then
+		if bindings.onAwaken then bindings.onAwaken() end
 	end
 end
 
@@ -120,13 +122,31 @@ function InputController.getMovementDirection(): Vector3
 	if dir.Magnitude > 0 then
 		local camera = workspace.CurrentCamera
 		if camera then
-			local camCF = camera.CFrame
-			local flat = CFrame.new(Vector3.zero, Vector3.new(camCF.LookVector.X, 0, camCF.LookVector.Z).Unit)
+			local look = camera.CFrame.LookVector
+			local flat = CFrame.new(Vector3.zero, Vector3.new(look.X, 0, look.Z).Unit)
 			dir = flat:VectorToWorldSpace(dir).Unit
 		end
 	end
 
 	return dir
+end
+
+function InputController.getLeftDodgeDirection(): Vector3
+	local camera = workspace.CurrentCamera
+	if camera then
+		local right = camera.CFrame.RightVector
+		return Vector3.new(-right.X, 0, -right.Z).Unit
+	end
+	return Vector3.new(-1, 0, 0)
+end
+
+function InputController.getRightDodgeDirection(): Vector3
+	local camera = workspace.CurrentCamera
+	if camera then
+		local right = camera.CFrame.RightVector
+		return Vector3.new(right.X, 0, right.Z).Unit
+	end
+	return Vector3.new(1, 0, 0)
 end
 
 return InputController

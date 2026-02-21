@@ -1,4 +1,5 @@
 -- CombatController.luau — Client-side M1 combat with procedural animations + ability casting
+-- Supports both Lux and Quake with appropriate VFX
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -8,15 +9,11 @@ local FruitConfig = require(ReplicatedStorage.Shared.FruitConfig)
 local CombatConfig = require(ReplicatedStorage.Shared.CombatConfig)
 local Enums = require(ReplicatedStorage.Shared.Enums)
 
-local Remotes = ReplicatedStorage.Remotes
-local CombatRemote = Remotes.Combat
-local CombatResult = Remotes.CombatResult
-local AbilityRemote = Remotes.Ability
-local AbilityVFX = Remotes.AbilityVFX
-local BlockRemote = Remotes.Block
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 
 local VFXUtil -- set in init
 local HudController -- set in init
+local SoundController -- set in init
 
 local CombatController = {}
 
@@ -28,25 +25,32 @@ local lastAttackTime = 0
 local isBlocking = false
 local abilityCooldowns: { [number]: number } = {}
 
--- Procedural punch animation Motor6D offsets
+-- Procedural punch animation offsets
 local PUNCH_OFFSETS = {
-	CFrame.new(0, 0, -1.5) * CFrame.Angles(math.rad(-90), 0, 0), -- jab
-	CFrame.new(0.5, 0, -1.5) * CFrame.Angles(math.rad(-90), math.rad(15), 0), -- cross
-	CFrame.new(-0.3, 0.3, -1.2) * CFrame.Angles(math.rad(-80), math.rad(-20), 0), -- hook
-	CFrame.new(0, 0.8, -1) * CFrame.Angles(math.rad(-110), 0, 0), -- uppercut
+	CFrame.new(0, 0, -1.5) * CFrame.Angles(math.rad(-90), 0, 0),
+	CFrame.new(0.5, 0, -1.5) * CFrame.Angles(math.rad(-90), math.rad(15), 0),
+	CFrame.new(-0.3, 0.3, -1.2) * CFrame.Angles(math.rad(-80), math.rad(-20), 0),
+	CFrame.new(0, 0.8, -1) * CFrame.Angles(math.rad(-110), 0, 0),
 }
 
-function CombatController.init(vfxUtil, hudCtrl)
+function CombatController.init(vfxUtil, hudCtrl, soundCtrl)
 	VFXUtil = vfxUtil
 	HudController = hudCtrl
+	SoundController = soundCtrl
 
-	CombatResult.OnClientEvent:Connect(function(data)
-		CombatController.onCombatResult(data)
-	end)
+	local CombatResult = Remotes:FindFirstChild("CombatResult")
+	if CombatResult then
+		CombatResult.OnClientEvent:Connect(function(data)
+			CombatController.onCombatResult(data)
+		end)
+	end
 
-	AbilityVFX.OnClientEvent:Connect(function(data)
-		CombatController.onAbilityVFX(data)
-	end)
+	local AbilityVFX = Remotes:FindFirstChild("AbilityVFX")
+	if AbilityVFX then
+		AbilityVFX.OnClientEvent:Connect(function(data)
+			CombatController.onAbilityVFX(data)
+		end)
+	end
 end
 
 function CombatController.onM1()
@@ -56,9 +60,7 @@ function CombatController.onM1()
 	local character = player.Character
 	if not character then return end
 
-	lastAttackTime = now
-
-	-- Combo tracking
+	-- Combo tracking (check window BEFORE updating timestamp)
 	if now - lastAttackTime > CombatConfig.COMBO_WINDOW then
 		comboIndex = 1
 	else
@@ -68,11 +70,22 @@ function CombatController.onM1()
 		end
 	end
 
+	lastAttackTime = now
+
 	-- Play procedural punch animation
 	CombatController.playPunchAnimation(character, comboIndex)
 
+	-- Play sound
+	if SoundController then
+		local swingNames = { "M1_Swing1", "M1_Swing2", "M1_Swing3", "M1_Swing4" }
+		SoundController.play(swingNames[comboIndex] or "M1_Swing1")
+	end
+
 	-- Fire to server
-	CombatRemote:FireServer({ comboIndex = comboIndex })
+	local CombatRemote = Remotes:FindFirstChild("Combat")
+	if CombatRemote then
+		CombatRemote:FireServer({ comboIndex = comboIndex })
+	end
 end
 
 function CombatController.playPunchAnimation(character: Model, index: number)
@@ -84,17 +97,13 @@ function CombatController.playPunchAnimation(character: Model, index: number)
 	local arm = (index % 2 == 1) and rightArm or leftArm
 	if not arm then arm = rightArm or leftArm end
 
-	-- Quick punch tween
-	local offset = PUNCH_OFFSETS[index] or PUNCH_OFFSETS[1]
 	local originalCF = arm.CFrame
 
-	-- Forward punch
 	local punchTween = TweenService:Create(arm, TweenInfo.new(0.08, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 		CFrame = arm.CFrame * CFrame.new(0, 0, -1.5),
 	})
 	punchTween:Play()
 
-	-- Return
 	task.delay(0.12, function()
 		if arm and arm.Parent then
 			local returnTween = TweenService:Create(arm, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
@@ -107,12 +116,14 @@ end
 
 function CombatController.onBlock(holding: boolean)
 	isBlocking = holding
-	BlockRemote:FireServer(holding)
+	local BlockRemote = Remotes:FindFirstChild("Block")
+	if BlockRemote then
+		BlockRemote:FireServer(holding)
+	end
 
 	local character = player.Character
 	if not character then return end
 
-	-- Block stance visual
 	local humanoid = character:FindFirstChildOfClass("Humanoid")
 	if humanoid then
 		if holding then
@@ -121,30 +132,56 @@ function CombatController.onBlock(holding: boolean)
 			humanoid.WalkSpeed = 16
 		end
 	end
+
+	if SoundController and holding then
+		SoundController.play("Block_Impact")
+	end
 end
 
 function CombatController.onAbility(slot: number)
 	local now = tick()
 	local lastUsed = abilityCooldowns[slot] or 0
 
-	-- Get ability data for cooldown check
-	local abilityData = FruitConfig.getAbility("lux", slot)
+	-- Get equipped fruit from FruitController or fallback
+	local FruitController = nil
+	pcall(function()
+		FruitController = require(script.Parent.FruitController)
+	end)
+	local fruitId = FruitConfig.DEFAULT_FRUIT
+	if FruitController and FruitController.getEquippedFruit then
+		fruitId = FruitController.getEquippedFruit() or FruitConfig.DEFAULT_FRUIT
+	end
+
+	local abilityData = FruitConfig.getAbility(fruitId, slot)
 	if not abilityData then return end
 
 	if now - lastUsed < abilityData.Cooldown then return end
 	abilityCooldowns[slot] = now
 
-	-- Get cursor world position
 	local cursorPos = mouse.Hit and mouse.Hit.Position or nil
 
-	AbilityRemote:FireServer({
-		slot = slot,
-		cursorPos = cursorPos,
-	})
+	local AbilityRemote = Remotes:FindFirstChild("Ability")
+	if AbilityRemote then
+		AbilityRemote:FireServer({
+			slot = slot,
+			cursorPos = cursorPos,
+		})
+	end
 
 	-- Update HUD cooldown
 	if HudController then
 		HudController.startCooldown(slot, abilityData.Cooldown)
+	end
+
+	-- Play sound based on fruit and ability
+	if SoundController then
+		if fruitId == "lux" then
+			local sounds = { "Lux_Beam", "Lux_Kick", "Lux_Barrage", "Lux_Ultimate", "Lux_Flash", "Lux_Barrage" }
+			SoundController.play(sounds[slot] or "Lux_Beam")
+		elseif fruitId == "quake" then
+			local sounds = { "Quake_Punch", "Quake_Shake", "Quake_Slam", "Quake_Slam", "Quake_Ultimate", "Quake_Slam" }
+			SoundController.play(sounds[slot] or "Quake_Punch")
+		end
 	end
 end
 
@@ -160,6 +197,13 @@ function CombatController.onCombatResult(data: any)
 		if rootPart and VFXUtil then
 			VFXUtil.createHitEffect(rootPart.Position, Color3.fromRGB(255, 80, 80))
 			VFXUtil.screenShake(workspace.CurrentCamera, 0.5, 0.15)
+		end
+		if SoundController then
+			SoundController.play("M1_Hit")
+		end
+		if data.guardBroken and HudController then
+			HudController.showCenterText("GUARD BROKEN!", Color3.fromRGB(255, 80, 80), 1.5)
+			HudController.screenFlash(Color3.fromRGB(255, 50, 50), 0.3)
 		end
 	elseif data.hit then
 		-- We landed a hit
@@ -181,13 +225,20 @@ function CombatController.onCombatResult(data: any)
 			end
 			VFXUtil.screenShake(workspace.CurrentCamera, 0.3, 0.1)
 		end
+		if SoundController then
+			if data.comboIndex == CombatConfig.COMBO_LENGTH then
+				SoundController.play("M1_Finisher")
+			else
+				SoundController.play("M1_HitHard")
+			end
+		end
 	end
 end
 
 function CombatController.onAbilityVFX(data: any)
 	if not data or not VFXUtil then return end
 
-	local fruitId = data.fruitId or "lux"
+	local fruitId = data.fruitId or FruitConfig.DEFAULT_FRUIT
 	local fruit = FruitConfig.getFruit(fruitId)
 	if not fruit then return end
 	local color = fruit.PrimaryColor
@@ -217,6 +268,11 @@ function CombatController.onAbilityVFX(data: any)
 		VFXUtil.createAoECircle(cursorPos, radius, color, 1.5)
 		VFXUtil.screenShake(workspace.CurrentCamera, 0.6, 0.4)
 
+		-- Extra quake effects
+		if fruitId == "quake" then
+			VFXUtil.screenShake(workspace.CurrentCamera, 1.5, 0.8)
+		end
+
 	elseif mode == Enums.AbilityMode.BUFF then
 		VFXUtil.createTeleportFlash(origin, color)
 		if cursorPos then
@@ -224,7 +280,6 @@ function CombatController.onAbilityVFX(data: any)
 		end
 
 	elseif mode == Enums.AbilityMode.MULTI_HIT then
-		-- Rapid hit effects
 		local abilityData = FruitConfig.getAbility(fruitId, data.slot)
 		local hitCount = abilityData and abilityData.HitCount or 8
 		local interval = abilityData and abilityData.HitInterval or 0.12
@@ -234,6 +289,23 @@ function CombatController.onAbilityVFX(data: any)
 			end)
 		end
 		VFXUtil.screenShake(workspace.CurrentCamera, 0.4, hitCount * interval)
+
+	elseif mode == Enums.AbilityMode.GRAB then
+		VFXUtil.burstParticles(origin + direction * 3, color, 10)
+		VFXUtil.screenShake(workspace.CurrentCamera, 1.2, 0.3)
+
+	elseif mode == Enums.AbilityMode.PROJECTILE then
+		local abilityData = FruitConfig.getAbility(fruitId, data.slot)
+		local range = abilityData and abilityData.Range or 60
+		VFXUtil.createProjectile(origin, origin + direction * range, color, 0.8)
+		VFXUtil.burstParticles(origin + direction * range, color, 20)
+		VFXUtil.screenShake(workspace.CurrentCamera, 0.8, 0.3)
+
+	elseif mode == Enums.AbilityMode.ZONE then
+		local abilityData = FruitConfig.getAbility(fruitId, data.slot)
+		local radius = abilityData and abilityData.Radius or 20
+		VFXUtil.createAoECircle(cursorPos, radius, color, 3.0)
+		VFXUtil.screenShake(workspace.CurrentCamera, 1.0, 0.5)
 	end
 end
 
