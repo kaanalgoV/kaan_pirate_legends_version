@@ -25,9 +25,6 @@ if not Remotes then
 	return
 end
 
--- Wait for character
-local character = player.Character or player.CharacterAdded:Wait()
-
 -- Disable default Roblox UI
 pcall(function()
 	StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.PlayerList, false)
@@ -242,5 +239,15 @@ if InputController then
 		end,
 	})
 end
+
+-- ═══════════════════════════════════════════════════════════════
+-- NON-BLOCKING CHARACTER WAIT
+-- MainMenuUI doesn't need a character, so wait in a spawned thread
+-- ═══════════════════════════════════════════════════════════════
+
+task.spawn(function()
+	local character = player.Character or player.CharacterAdded:Wait()
+	print("[PirateLegends] Character loaded: " .. character.Name)
+end)
 
 print("[PirateLegends] Client fully initialized")

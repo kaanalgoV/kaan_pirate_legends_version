@@ -64,6 +64,7 @@ local _slotFrames: { Frame } = {}
 local _resultLabel: TextLabel? = nil
 local _exitBtn: TextButton? = nil
 local _pageLabel: TextLabel? = nil
+local _equipConnections: { [number]: RBXScriptConnection } = {}
 
 -- Colors
 local BG = Color3.fromRGB(5, 5, 15)
@@ -1212,7 +1213,7 @@ function GachaRoomController._onSpinResult(data: any)
 
 	local fruitId = data.fruitId
 	local rarity = data.rarity
-	local isNew = data.isNew
+	local isNew = not data.duplicate
 
 	-- Update gems
 	if data.gems then
@@ -1220,14 +1221,16 @@ function GachaRoomController._onSpinResult(data: any)
 		GachaRoomController._updateGems()
 	end
 
-	-- Update owned fruits
-	if isNew and fruitId and not table.find(_ownedFruits, fruitId) then
+	-- Update owned fruits from server-provided list when available
+	if data.ownedFruits then
+		_ownedFruits = data.ownedFruits
+	elseif isNew and fruitId and not table.find(_ownedFruits, fruitId) then
 		table.insert(_ownedFruits, fruitId)
 	end
 
 	-- Show result with slight delay for drama
 	task.delay(1.0, function()
-		GachaRoomController._showSpinResult(fruitId, rarity, isNew)
+		GachaRoomController._showSpinResult(fruitId, rarity, isNew, data.gemRefund)
 
 		-- VFX: golden burst from chest
 		local vfxPos = _chestPos + Vector3.new(0, 4, 0)
@@ -1260,8 +1263,20 @@ function GachaRoomController._onSpinResult(data: any)
 	end)
 end
 
-function GachaRoomController._showSpinResult(fruitId: string, rarity: string, isNew: boolean?)
+function GachaRoomController._showSpinResult(fruitId: string?, rarity: string, isNew: boolean?, gemRefund: number?)
 	if not _resultLabel then return end
+
+	-- Gem refund case: no fruit was won, show gem refund display
+	if not fruitId then
+		local refundAmount = gemRefund or 0
+		_resultLabel.Text = "Gem Refund: +" .. tostring(refundAmount) .. " gems"
+		_resultLabel.TextColor3 = GOLD
+
+		-- Scale animation
+		_resultLabel.TextSize = 10
+		_tween(_resultLabel, 0.4, { TextSize = 28 })
+		return
+	end
 
 	local fruit = FruitConfig.getFruit(fruitId)
 	if not fruit then return end
@@ -1477,8 +1492,12 @@ function GachaRoomController._updateInventorySlots()
 					equipBtn.BackgroundColor3 = BTN_GREEN
 				end
 
-				-- Reconnect (simple approach)
-				equipBtn.MouseButton1Click:Connect(function()
+				-- Disconnect old handler before reconnecting to prevent duplicates
+				if _equipConnections[i] then
+					_equipConnections[i]:Disconnect()
+					_equipConnections[i] = nil
+				end
+				_equipConnections[i] = equipBtn.MouseButton1Click:Connect(function()
 					if fruitId and fruitId ~= _equippedFruit then
 						GachaRoomController._equipFruit(fruitId)
 					end

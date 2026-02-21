@@ -1,5 +1,5 @@
 -- MainMenuUI.luau  --  Dark anime-style start screen for Pirate Legends
--- 4-card vertical layout  |  "Press any key" gate  |  camera orbit  |  particle BG
+-- 4-card vertical layout  |  camera orbit  |  particle BG
 -- API: MainMenuUI.init(callbacks), MainMenuUI.show(), MainMenuUI.hide()
 -- callbacks = { onOpenWorld, onTreasure, on1v1, on3v3 }
 
@@ -7,7 +7,6 @@ local TweenService   = game:GetService("TweenService")
 local Players        = game:GetService("Players")
 local RunService     = game:GetService("RunService")
 local Lighting       = game:GetService("Lighting")
-local UserInputService = game:GetService("UserInputService")
 
 local MainMenuUI = {}
 
@@ -19,7 +18,6 @@ local _screenGui: ScreenGui?           = nil
 local _overlay: Frame?                 = nil
 local _titleLabel: TextLabel?          = nil
 local _subtitleLabel: TextLabel?       = nil
-local _pressAnyKeyLabel: TextLabel?    = nil
 local _cardContainer: Frame?           = nil
 local _cards: { Frame }                = {}
 local _particleFrames: { Frame }       = {}
@@ -34,7 +32,6 @@ local _cameraAngle                              = 0
 local _charHideConnection: RBXScriptConnection? = nil
 local _charAddedConnection: RBXScriptConnection? = nil
 local _titleBounceConnection: RBXScriptConnection? = nil
-local _pressAnyKeyConnection: RBXScriptConnection? = nil
 
 -- ═══════════════════════════════════════════════════════════════
 -- PALETTE
@@ -215,11 +212,11 @@ local function _startCameraOrbit()
 
 	_cameraConnection = RunService.Heartbeat:Connect(function(dt: number)
 		_cameraAngle += dt * 0.08
-		local radius = 200
-		local height = 450
+		local radius = 80
+		local height = 60
 		local x = math.cos(_cameraAngle) * radius
 		local z = math.sin(_cameraAngle) * radius
-		camera.CFrame = CFrame.new(Vector3.new(x, height, z), Vector3.new(0, 10, 0))
+		camera.CFrame = CFrame.new(Vector3.new(x, height, z), Vector3.new(0, 5, 0))
 	end)
 end
 
@@ -373,8 +370,8 @@ end
 
 local function _buildIcon(viewport: ViewportFrame, iconType: string, accent: Color3)
 	local camera = Instance.new("Camera")
-	camera.CFrame = CFrame.new(Vector3.new(0, 0, 5), Vector3.zero)
-	camera.FieldOfView = 40
+	camera.CFrame = CFrame.new(Vector3.new(0, 0, 4), Vector3.zero)
+	camera.FieldOfView = 50
 	camera.Parent = viewport
 	viewport.CurrentCamera = camera
 
@@ -744,8 +741,8 @@ local function _buildCard(mode: { [string]: any }, yOffset: number, index: numbe
 	-- Card title
 	_create("TextLabel", {
 		Name = "CardTitle",
-		Size = UDim2.new(0, 160, 0, 26),
-		Position = UDim2.new(0, 106, 0, 18),
+		Size = UDim2.new(0.45, 0, 0, 26),
+		Position = UDim2.new(0, 106, 0.15, 0),
 		BackgroundTransparency = 1,
 		Text = mode.title,
 		TextColor3 = WHITE,
@@ -759,8 +756,8 @@ local function _buildCard(mode: { [string]: any }, yOffset: number, index: numbe
 	-- Subtitle
 	_create("TextLabel", {
 		Name = "CardSubtitle",
-		Size = UDim2.new(0, 170, 0, 30),
-		Position = UDim2.new(0, 106, 0, 46),
+		Size = UDim2.new(0.45, 0, 0, 30),
+		Position = UDim2.new(0, 106, 0.42, 0),
 		BackgroundTransparency = 1,
 		Text = mode.subtitle,
 		TextColor3 = DIM_GRAY,
@@ -974,20 +971,6 @@ local function _buildUI()
 	}, _overlay) :: Frame
 	_addCorner(decoLine, 1)
 
-	-- "Press any key to continue" label (fades in before cards)
-	_pressAnyKeyLabel = _create("TextLabel", {
-		Name = "PressAnyKey",
-		Size = UDim2.new(1, 0, 0, 30),
-		Position = UDim2.new(0, 0, 0.65, 0),
-		BackgroundTransparency = 1,
-		Text = "Press any key to continue",
-		TextColor3 = DIM_WHITE,
-		TextTransparency = 1,
-		TextSize = 16,
-		Font = Enum.Font.Gotham,
-		ZIndex = ZBASE + 10,
-	}, _overlay) :: TextLabel
-
 	-- Card container (vertical stack centered)
 	local totalCardsHeight = (#MODES * CARD_HEIGHT) + ((#MODES - 1) * CARD_GAP)
 	_cardContainer = _create("Frame", {
@@ -1051,18 +1034,17 @@ local function _buildUI()
 end
 
 -- ═══════════════════════════════════════════════════════════════
--- INTRO ANIMATION  (title drop -> "press any key" -> card reveal)
+-- INTRO ANIMATION  (title bounce-drop -> sequential card reveal)
 -- ═══════════════════════════════════════════════════════════════
 
 local function _animateIntro()
-	if not _titleLabel or not _subtitleLabel or not _pressAnyKeyLabel then return end
+	if not _titleLabel or not _subtitleLabel then return end
 
 	_cardsRevealed = false
 
 	-- Reset positions
 	_titleLabel.Position = UDim2.new(0, 0, 0, -60)
 	_subtitleLabel.TextTransparency = 1
-	_pressAnyKeyLabel.TextTransparency = 1
 
 	-- Hide all cards initially
 	for _, card in _cards do
@@ -1086,7 +1068,7 @@ local function _animateIntro()
 		end
 	end
 
-	-- Title bounce drop from above
+	-- Title bounce drop from above (0.6s)
 	local bounceInfo = TweenInfo.new(0.6, Enum.EasingStyle.Bounce, Enum.EasingDirection.Out)
 	TweenService:Create(_titleLabel, bounceInfo, {
 		Position = UDim2.new(0, 0, 0, 60),
@@ -1101,81 +1083,33 @@ local function _animateIntro()
 		}):Play()
 	end
 
-	-- Start the looping title scale-pulse bounce
-	task.delay(0.7, function()
+	-- Start the looping title scale-pulse bounce after title lands
+	task.delay(0.6, function()
 		_startTitleBounce()
-	end)
 
-	-- Fade in "Press any key to continue" with pulsing alpha
-	task.delay(1.0, function()
-		if not _pressAnyKeyLabel then return end
-		_tween(_pressAnyKeyLabel, 0.6, { TextTransparency = 0 })
+		-- Reveal subtitle
+		if _subtitleLabel then
+			_tween(_subtitleLabel, 0.4, { TextTransparency = 0 })
+		end
 
-		-- Pulse the "press any key" label opacity
-		local pressLabel = _pressAnyKeyLabel
-		_pressAnyKeyConnection = RunService.Heartbeat:Connect(function()
-			if not pressLabel or not pressLabel.Parent then
-				if _pressAnyKeyConnection then
-					_pressAnyKeyConnection:Disconnect()
-					_pressAnyKeyConnection = nil
-				end
-				return
+		-- Position deco line
+		if _overlay then
+			local deco = _overlay:FindFirstChild("DecoLine")
+			if deco then
+				(deco :: Frame).Position = UDim2.new(0.5, -100, 0, 150)
 			end
-			local alpha = 0.3 + math.sin(tick() * 2.5) * 0.3
-			pressLabel.TextTransparency = alpha
-		end)
+		end
 
-		-- Wait for any key press to reveal cards
-		local inputConn: RBXScriptConnection? = nil
-		inputConn = UserInputService.InputBegan:Connect(function(input: InputObject, gameProcessed: boolean)
-			-- Ignore gamepad thumbstick noise, only accept real key/button/click
-			if input.UserInputType == Enum.UserInputType.MouseMovement then return end
-			if input.UserInputType == Enum.UserInputType.Focus then return end
-
-			-- Disconnect immediately to prevent double-firing
-			if inputConn then
-				inputConn:Disconnect()
-				inputConn = nil
-			end
-
-			-- Stop press-any-key pulse
-			if _pressAnyKeyConnection then
-				_pressAnyKeyConnection:Disconnect()
-				_pressAnyKeyConnection = nil
-			end
-
-			-- Fade out "press any key"
-			if _pressAnyKeyLabel then
-				_tween(_pressAnyKeyLabel, 0.3, { TextTransparency = 1 })
-			end
-
-			-- Now reveal subtitle + deco + cards
-			task.delay(0.2, function()
-				if _subtitleLabel then
-					_tween(_subtitleLabel, 0.4, { TextTransparency = 0 })
-				end
+		-- Sequential card fade-in starting immediately after title lands
+		for i, card in _cards do
+			task.delay((i - 1) * 0.18, function()
+				_fadeInCard(card)
 			end)
+		end
 
-			task.delay(0.3, function()
-				if _overlay then
-					local deco = _overlay:FindFirstChild("DecoLine")
-					if deco then
-						(deco :: Frame).Position = UDim2.new(0.5, -100, 0, 150)
-					end
-				end
-			end)
-
-			-- Sequential card fade-in
-			for i, card in _cards do
-				task.delay(0.4 + (i - 1) * 0.18, function()
-					_fadeInCard(card)
-				end)
-			end
-
-			-- Mark cards as interactable after they finish appearing
-			task.delay(0.4 + #_cards * 0.18 + 0.35, function()
-				_cardsRevealed = true
-			end)
+		-- Mark cards as interactable after they finish appearing
+		task.delay(#_cards * 0.18 + 0.35, function()
+			_cardsRevealed = true
 		end)
 	end)
 end
@@ -1215,12 +1149,6 @@ function MainMenuUI.hide()
 	_removeBlur()
 	_stopTitleBounce()
 
-	-- Stop press-any-key pulse if still running
-	if _pressAnyKeyConnection then
-		_pressAnyKeyConnection:Disconnect()
-		_pressAnyKeyConnection = nil
-	end
-
 	-- Fade out overlay
 	local fadeInfo = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 	local fadeTween = TweenService:Create(_overlay, fadeInfo, {
@@ -1244,7 +1172,6 @@ function MainMenuUI.init(callbacks: {
 	_callbacks = (callbacks or {}) :: any
 
 	_buildUI()
-	MainMenuUI.show()
 
 	print("[PirateLegends] MainMenuUI: READY (4-card mode select)")
 end

@@ -1,6 +1,6 @@
 -- HudController.luau — Dark Anime HUD with glass-morphism
 -- HP bar with damage trail, Guard, Haki, Resolve, Awakening meter
--- Ability bar with key labels, Geppo dots, Level/XP, Kill streak
+-- Ability bar with animated 3D icons, key labels, Geppo dots, Level/XP, Kill streak
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -39,6 +39,12 @@ local cooldownTimers: { [number]: number } = {}
 local cooldownDurations: { [number]: number } = {}
 local lastEquippedFruit: string? = nil
 local abilityBarContainer: Frame? = nil
+
+-- Rotation animation state
+local iconCameras: { Camera } = {}
+local iconModels: { { parts: { BasePart }, origin: CFrame } } = {}
+local rotationConnection: RBXScriptConnection? = nil
+local rotationAngle: number = 0
 
 -- ═══════════════════════════════════════════════════════════════
 -- COLORS
@@ -104,6 +110,241 @@ local function _tween(obj: any, duration: number, props: any)
 end
 
 -- ═══════════════════════════════════════════════════════════════
+-- 3D ICON SHAPE BUILDERS
+-- ═══════════════════════════════════════════════════════════════
+
+-- Each builder returns a list of Parts to put inside a ViewportFrame.
+-- The parts are centered around (0,0,0) and meant to be viewed from ~5 studs.
+
+local function _buildBeamIcon(primary: Color3, secondary: Color3): { BasePart }
+	-- Elongated cylinder pointing forward
+	local cylinder = Instance.new("Part")
+	cylinder.Shape = Enum.PartType.Cylinder
+	cylinder.Size = Vector3.new(3.5, 1.0, 1.0)
+	cylinder.Material = Enum.Material.Neon
+	cylinder.Anchored = true
+	cylinder.CanCollide = false
+	cylinder.Color = primary
+	cylinder.CFrame = CFrame.new(0, 0, 0) * CFrame.Angles(0, 0, math.rad(90))
+
+	-- Small glowing tip
+	local tip = Instance.new("Part")
+	tip.Shape = Enum.PartType.Ball
+	tip.Size = Vector3.new(0.6, 0.6, 0.6)
+	tip.Material = Enum.Material.Neon
+	tip.Anchored = true
+	tip.CanCollide = false
+	tip.Color = secondary
+	tip.CFrame = CFrame.new(0, 1.8, 0)
+
+	return { cylinder, tip }
+end
+
+local function _buildDashIcon(primary: Color3, secondary: Color3): { BasePart }
+	-- Angled wedge shape
+	local wedge = Instance.new("WedgePart")
+	wedge.Size = Vector3.new(1.6, 1.6, 2.4)
+	wedge.Material = Enum.Material.Neon
+	wedge.Anchored = true
+	wedge.CanCollide = false
+	wedge.Color = primary
+	wedge.CFrame = CFrame.new(0, 0, 0) * CFrame.Angles(0, 0, math.rad(-15))
+
+	-- Speed trail accent
+	local trail = Instance.new("Part")
+	trail.Shape = Enum.PartType.Block
+	trail.Size = Vector3.new(0.3, 0.3, 2.0)
+	trail.Material = Enum.Material.Neon
+	trail.Anchored = true
+	trail.CanCollide = false
+	trail.Color = secondary
+	trail.CFrame = CFrame.new(-0.9, -0.5, 0)
+
+	return { wedge, trail }
+end
+
+local function _buildMultiHitIcon(primary: Color3, secondary: Color3): { BasePart }
+	-- Cluster of small spheres arranged in a pattern
+	local parts: { BasePart } = {}
+	local positions = {
+		Vector3.new(0, 0, 0),
+		Vector3.new(0.8, 0.6, 0.3),
+		Vector3.new(-0.8, 0.6, -0.3),
+		Vector3.new(0.5, -0.7, -0.4),
+		Vector3.new(-0.5, -0.7, 0.4),
+		Vector3.new(0, 0.9, -0.5),
+	}
+	for idx, pos in positions do
+		local ball = Instance.new("Part")
+		ball.Shape = Enum.PartType.Ball
+		ball.Size = Vector3.new(0.7, 0.7, 0.7)
+		ball.Material = Enum.Material.Neon
+		ball.Anchored = true
+		ball.CanCollide = false
+		ball.Color = if idx % 2 == 0 then secondary else primary
+		ball.CFrame = CFrame.new(pos)
+		table.insert(parts, ball)
+	end
+	return parts
+end
+
+local function _buildAoEIcon(primary: Color3, secondary: Color3): { BasePart }
+	-- Flat cylinder (disc) with a sphere on top
+	local disc = Instance.new("Part")
+	disc.Shape = Enum.PartType.Cylinder
+	disc.Size = Vector3.new(0.4, 2.4, 2.4)
+	disc.Material = Enum.Material.Neon
+	disc.Anchored = true
+	disc.CanCollide = false
+	disc.Color = secondary
+	disc.CFrame = CFrame.new(0, -0.5, 0) * CFrame.Angles(0, 0, math.rad(90))
+
+	local orb = Instance.new("Part")
+	orb.Shape = Enum.PartType.Ball
+	orb.Size = Vector3.new(1.2, 1.2, 1.2)
+	orb.Material = Enum.Material.Neon
+	orb.Anchored = true
+	orb.CanCollide = false
+	orb.Color = primary
+	orb.CFrame = CFrame.new(0, 0.5, 0)
+
+	return { disc, orb }
+end
+
+local function _buildBuffIcon(primary: Color3, secondary: Color3): { BasePart }
+	-- Diamond shape (two wedges tip-to-tip)
+	local top = Instance.new("WedgePart")
+	top.Size = Vector3.new(1.4, 1.4, 1.4)
+	top.Material = Enum.Material.Neon
+	top.Anchored = true
+	top.CanCollide = false
+	top.Color = primary
+	top.CFrame = CFrame.new(0, 0.5, 0) * CFrame.Angles(0, 0, 0)
+
+	local bottom = Instance.new("WedgePart")
+	bottom.Size = Vector3.new(1.4, 1.4, 1.4)
+	bottom.Material = Enum.Material.Neon
+	bottom.Anchored = true
+	bottom.CanCollide = false
+	bottom.Color = secondary
+	bottom.CFrame = CFrame.new(0, -0.5, 0) * CFrame.Angles(math.rad(180), 0, 0)
+
+	return { top, bottom }
+end
+
+local function _buildGrabIcon(primary: Color3, secondary: Color3): { BasePart }
+	-- Two small parts facing each other like grabbing hands
+	local left = Instance.new("Part")
+	left.Shape = Enum.PartType.Block
+	left.Size = Vector3.new(0.5, 1.4, 0.8)
+	left.Material = Enum.Material.Neon
+	left.Anchored = true
+	left.CanCollide = false
+	left.Color = primary
+	left.CFrame = CFrame.new(-0.7, 0, 0) * CFrame.Angles(0, 0, math.rad(15))
+
+	local right = Instance.new("Part")
+	right.Shape = Enum.PartType.Block
+	right.Size = Vector3.new(0.5, 1.4, 0.8)
+	right.Material = Enum.Material.Neon
+	right.Anchored = true
+	right.CanCollide = false
+	right.Color = primary
+	right.CFrame = CFrame.new(0.7, 0, 0) * CFrame.Angles(0, 0, math.rad(-15))
+
+	-- Small orb between hands
+	local orb = Instance.new("Part")
+	orb.Shape = Enum.PartType.Ball
+	orb.Size = Vector3.new(0.6, 0.6, 0.6)
+	orb.Material = Enum.Material.Neon
+	orb.Anchored = true
+	orb.CanCollide = false
+	orb.Color = secondary
+	orb.CFrame = CFrame.new(0, 0, 0)
+
+	return { left, right, orb }
+end
+
+local function _buildProjectileIcon(primary: Color3, secondary: Color3): { BasePart }
+	-- Pointed projectile: a sphere with a wedge tail
+	local head = Instance.new("Part")
+	head.Shape = Enum.PartType.Ball
+	head.Size = Vector3.new(1.2, 1.2, 1.2)
+	head.Material = Enum.Material.Neon
+	head.Anchored = true
+	head.CanCollide = false
+	head.Color = primary
+	head.CFrame = CFrame.new(0, 0.4, 0)
+
+	local tail = Instance.new("WedgePart")
+	tail.Size = Vector3.new(1.0, 1.6, 1.0)
+	tail.Material = Enum.Material.Neon
+	tail.Anchored = true
+	tail.CanCollide = false
+	tail.Color = secondary
+	tail.CFrame = CFrame.new(0, -0.7, 0) * CFrame.Angles(math.rad(180), 0, 0)
+
+	return { head, tail }
+end
+
+local function _buildDefaultIcon(primary: Color3, _secondary: Color3): { BasePart }
+	-- Fallback: simple sphere
+	local ball = Instance.new("Part")
+	ball.Shape = Enum.PartType.Ball
+	ball.Size = Vector3.new(1.8, 1.8, 1.8)
+	ball.Material = Enum.Material.Neon
+	ball.Anchored = true
+	ball.CanCollide = false
+	ball.Color = primary
+	ball.CFrame = CFrame.new(0, 0, 0)
+
+	return { ball }
+end
+
+-- Map AbilityMode to shape builder
+local ShapeBuilders = {
+	Beam       = _buildBeamIcon,
+	DashHit    = _buildDashIcon,
+	MultiHit   = _buildMultiHitIcon,
+	AoE        = _buildAoEIcon,
+	Buff       = _buildBuffIcon,
+	Grab       = _buildGrabIcon,
+	Projectile = _buildProjectileIcon,
+	Cone       = _buildBeamIcon,       -- similar to beam
+	Heal       = _buildBuffIcon,        -- similar to buff
+	Zone       = _buildAoEIcon,         -- similar to AoE
+}
+
+-- ═══════════════════════════════════════════════════════════════
+-- ROTATION ANIMATION
+-- ═══════════════════════════════════════════════════════════════
+
+local function _startRotationAnimation()
+	-- Disconnect previous if any
+	if rotationConnection then
+		rotationConnection:Disconnect()
+		rotationConnection = nil
+	end
+
+	rotationAngle = 0
+
+	rotationConnection = RunService.Heartbeat:Connect(function(dt)
+		rotationAngle = rotationAngle + dt * 0.6 -- slow rotation
+		local angle = rotationAngle
+
+		for i, camData in iconCameras do
+			if camData and camData.Parent then
+				local dist = 5
+				local x = math.sin(angle) * dist
+				local z = math.cos(angle) * dist
+				local y = 1.0
+				camData.CFrame = CFrame.new(Vector3.new(x, y, z), Vector3.new(0, 0, 0))
+			end
+		end
+	end)
+end
+
+-- ═══════════════════════════════════════════════════════════════
 -- INIT
 -- ═══════════════════════════════════════════════════════════════
 
@@ -145,6 +386,7 @@ end
 
 -- ═══════════════════════════════════════════════════════════════
 -- STATUS PANEL (HP, Guard, Haki, Resolve, Awakening) — Bottom Left
+-- More compact with subtle gradients on bar backgrounds
 -- ═══════════════════════════════════════════════════════════════
 
 function HudController.createStatusPanel()
@@ -152,37 +394,38 @@ function HudController.createStatusPanel()
 		Name = "StatusPanel",
 		AnchorPoint = Vector2.new(0, 1),
 		Position = UDim2.new(0, 20, 1, -100),
-		Size = UDim2.new(0, 440, 0, 160),
+		Size = UDim2.new(0, 420, 0, 140),
 		BackgroundColor3 = BG_PANEL,
 		BackgroundTransparency = 0.15,
 		BorderSizePixel = 0,
 	}, screenGui)
-	_corner(panel, 12)
-	_stroke(panel, GOLD, 2, 0.5)
+	_corner(panel, 10)
+	_stroke(panel, GOLD, 1.5, 0.5)
 	_gradient(panel, BG_PANEL, BG_PANEL2)
 
-	local padding = _create("UIPadding", {
-		PaddingLeft = UDim.new(0, 14),
-		PaddingRight = UDim.new(0, 14),
-		PaddingTop = UDim.new(0, 10),
-		PaddingBottom = UDim.new(0, 10),
+	_create("UIPadding", {
+		PaddingLeft = UDim.new(0, 10),
+		PaddingRight = UDim.new(0, 10),
+		PaddingTop = UDim.new(0, 8),
+		PaddingBottom = UDim.new(0, 6),
 	}, panel)
 
-	local layout = _create("UIListLayout", {
+	_create("UIListLayout", {
 		FillDirection = Enum.FillDirection.Vertical,
-		Padding = UDim.new(0, 4),
+		Padding = UDim.new(0, 3),
 		SortOrder = Enum.SortOrder.LayoutOrder,
 	}, panel)
 
-	-- HP Bar (largest, 32px height, with damage trail)
+	-- HP Bar (largest, 28px height, with damage trail)
 	local hpContainer = _create("Frame", {
 		Name = "HPContainer",
-		Size = UDim2.new(1, 0, 0, 32),
+		Size = UDim2.new(1, 0, 0, 28),
 		BackgroundColor3 = HP_BG,
 		BorderSizePixel = 0,
 		LayoutOrder = 1,
 	}, panel)
-	_corner(hpContainer, 6)
+	_corner(hpContainer, 5)
+	_gradient(hpContainer, HP_BG, Color3.fromRGB(30, 8, 8), 0)
 
 	hpTrail = _create("Frame", {
 		Name = "HPTrail",
@@ -192,7 +435,7 @@ function HudController.createStatusPanel()
 		BorderSizePixel = 0,
 		ZIndex = 1,
 	}, hpContainer)
-	_corner(hpTrail, 6)
+	_corner(hpTrail, 5)
 
 	hpBar = _create("Frame", {
 		Name = "HPFill",
@@ -201,7 +444,7 @@ function HudController.createStatusPanel()
 		BorderSizePixel = 0,
 		ZIndex = 2,
 	}, hpContainer)
-	_corner(hpBar, 6)
+	_corner(hpBar, 5)
 	_gradient(hpBar, HP_GREEN, Color3.fromRGB(60, 160, 40))
 
 	hpLabel = _create("TextLabel", {
@@ -210,33 +453,34 @@ function HudController.createStatusPanel()
 		BackgroundTransparency = 1,
 		Text = "HP",
 		TextColor3 = WHITE,
-		TextSize = 14,
+		TextSize = 13,
 		Font = Enum.Font.GothamBold,
 		TextXAlignment = Enum.TextXAlignment.Right,
 		ZIndex = 3,
 	}, hpContainer)
 
-	local hpNameLabel = _create("TextLabel", {
+	_create("TextLabel", {
 		Size = UDim2.new(0, 30, 1, 0),
-		Position = UDim2.new(0, 6, 0, 0),
+		Position = UDim2.new(0, 5, 0, 0),
 		BackgroundTransparency = 1,
 		Text = "HP",
 		TextColor3 = WHITE,
-		TextSize = 12,
+		TextSize = 11,
 		Font = Enum.Font.GothamBold,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		ZIndex = 3,
 	}, hpContainer)
 
-	-- Guard Bar (24px)
+	-- Guard Bar (18px)
 	local guardContainer = _create("Frame", {
 		Name = "GuardContainer",
-		Size = UDim2.new(1, 0, 0, 20),
+		Size = UDim2.new(1, 0, 0, 18),
 		BackgroundColor3 = GUARD_BG,
 		BorderSizePixel = 0,
 		LayoutOrder = 2,
 	}, panel)
-	_corner(guardContainer, 5)
+	_corner(guardContainer, 4)
+	_gradient(guardContainer, GUARD_BG, Color3.fromRGB(10, 20, 45), 0)
 
 	guardBar = _create("Frame", {
 		Name = "GuardFill",
@@ -244,15 +488,15 @@ function HudController.createStatusPanel()
 		BackgroundColor3 = GUARD_BLUE,
 		BorderSizePixel = 0,
 	}, guardContainer)
-	_corner(guardBar, 5)
+	_corner(guardBar, 4)
 	_gradient(guardBar, GUARD_BLUE, Color3.fromRGB(40, 100, 200))
 
 	guardLabel = _create("TextLabel", {
-		Size = UDim2.new(1, -6, 1, 0),
+		Size = UDim2.new(1, -5, 1, 0),
 		BackgroundTransparency = 1,
 		Text = "Guard",
 		TextColor3 = WHITE,
-		TextSize = 10,
+		TextSize = 9,
 		Font = Enum.Font.GothamBold,
 		TextXAlignment = Enum.TextXAlignment.Right,
 		ZIndex = 2,
@@ -264,21 +508,22 @@ function HudController.createStatusPanel()
 		BackgroundTransparency = 1,
 		Text = "GUARD",
 		TextColor3 = WHITE,
-		TextSize = 9,
+		TextSize = 8,
 		Font = Enum.Font.GothamBold,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		ZIndex = 2,
 	}, guardContainer)
 
-	-- Resolve Bar (16px)
+	-- Resolve Bar (14px)
 	local resolveContainer = _create("Frame", {
 		Name = "ResolveContainer",
-		Size = UDim2.new(1, 0, 0, 16),
+		Size = UDim2.new(1, 0, 0, 14),
 		BackgroundColor3 = RESOLVE_BG,
 		BorderSizePixel = 0,
 		LayoutOrder = 3,
 	}, panel)
 	_corner(resolveContainer, 4)
+	_gradient(resolveContainer, RESOLVE_BG, Color3.fromRGB(6, 28, 24), 0)
 
 	resolveBar = _create("Frame", {
 		Name = "ResolveFill",
@@ -293,7 +538,7 @@ function HudController.createStatusPanel()
 		BackgroundTransparency = 1,
 		Text = "Resolve",
 		TextColor3 = WHITE,
-		TextSize = 9,
+		TextSize = 8,
 		Font = Enum.Font.GothamBold,
 		TextXAlignment = Enum.TextXAlignment.Right,
 		ZIndex = 2,
@@ -305,21 +550,22 @@ function HudController.createStatusPanel()
 		BackgroundTransparency = 1,
 		Text = "RESOLVE",
 		TextColor3 = WHITE,
-		TextSize = 8,
+		TextSize = 7,
 		Font = Enum.Font.GothamBold,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		ZIndex = 2,
 	}, resolveContainer)
 
-	-- Haki Energy Bar (16px)
+	-- Haki Energy Bar (14px)
 	local hakiContainer = _create("Frame", {
 		Name = "HakiContainer",
-		Size = UDim2.new(1, 0, 0, 16),
+		Size = UDim2.new(1, 0, 0, 14),
 		BackgroundColor3 = HAKI_BG,
 		BorderSizePixel = 0,
 		LayoutOrder = 4,
 	}, panel)
 	_corner(hakiContainer, 4)
+	_gradient(hakiContainer, HAKI_BG, Color3.fromRGB(20, 6, 36), 0)
 
 	hakiBar = _create("Frame", {
 		Name = "HakiFill",
@@ -334,7 +580,7 @@ function HudController.createStatusPanel()
 		BackgroundTransparency = 1,
 		Text = "Haki",
 		TextColor3 = WHITE,
-		TextSize = 9,
+		TextSize = 8,
 		Font = Enum.Font.GothamBold,
 		TextXAlignment = Enum.TextXAlignment.Right,
 		ZIndex = 2,
@@ -346,21 +592,22 @@ function HudController.createStatusPanel()
 		BackgroundTransparency = 1,
 		Text = "HAKI [H]",
 		TextColor3 = WHITE,
-		TextSize = 8,
+		TextSize = 7,
 		Font = Enum.Font.GothamBold,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		ZIndex = 2,
 	}, hakiContainer)
 
-	-- Awakening Meter (12px)
+	-- Awakening Meter (10px)
 	local awakenContainer = _create("Frame", {
 		Name = "AwakenContainer",
-		Size = UDim2.new(1, 0, 0, 12),
+		Size = UDim2.new(1, 0, 0, 10),
 		BackgroundColor3 = AWAKEN_BG,
 		BorderSizePixel = 0,
 		LayoutOrder = 5,
 	}, panel)
 	_corner(awakenContainer, 3)
+	_gradient(awakenContainer, AWAKEN_BG, Color3.fromRGB(35, 18, 2), 0)
 
 	awakeningBar = _create("Frame", {
 		Name = "AwakenFill",
@@ -375,7 +622,7 @@ function HudController.createStatusPanel()
 		BackgroundTransparency = 1,
 		Text = "AWAKEN",
 		TextColor3 = WHITE,
-		TextSize = 8,
+		TextSize = 7,
 		Font = Enum.Font.GothamBold,
 		TextXAlignment = Enum.TextXAlignment.Right,
 		ZIndex = 2,
@@ -383,7 +630,7 @@ function HudController.createStatusPanel()
 end
 
 -- ═══════════════════════════════════════════════════════════════
--- ABILITY BAR — Bottom Center
+-- ABILITY BAR — Bottom Center (animated 3D icons)
 -- ═══════════════════════════════════════════════════════════════
 
 function HudController.createAbilityBar()
@@ -395,18 +642,22 @@ function HudController.createAbilityBar()
 		cooldownLabels = {}
 	end
 
+	-- Clear old icon data
+	iconCameras = {}
+	iconModels = {}
+
 	local container = _create("Frame", {
 		Name = "AbilityBar",
 		AnchorPoint = Vector2.new(0.5, 1),
 		Position = UDim2.new(0.5, 0, 1, -20),
-		Size = UDim2.new(0, 420, 0, 70),
+		Size = UDim2.new(0, 460, 0, 82),
 		BackgroundColor3 = BG_PANEL,
 		BackgroundTransparency = 0.15,
 		BorderSizePixel = 0,
 	}, screenGui)
 	abilityBarContainer = container
 	_corner(container, 10)
-	_stroke(container, GOLD, 2, 0.5)
+	_stroke(container, GOLD, 1.5, 0.5)
 	_gradient(container, BG_PANEL, BG_PANEL2)
 
 	_create("UIListLayout", {
@@ -419,36 +670,59 @@ function HudController.createAbilityBar()
 	_create("UIPadding", {
 		PaddingLeft = UDim.new(0, 8),
 		PaddingRight = UDim.new(0, 8),
+		PaddingTop = UDim.new(0, 4),
+		PaddingBottom = UDim.new(0, 4),
 	}, container)
 
 	local keyLabels = { "1", "2", "3", "4", "5", "6" }
-	local fruit = FruitConfig.getFruit(stateData.EquippedFruit or FruitConfig.DEFAULT_FRUIT) or FruitConfig.getFruit(FruitConfig.DEFAULT_FRUIT)
+	local fruitId = stateData.EquippedFruit or FruitConfig.DEFAULT_FRUIT
+	local fruit = FruitConfig.getFruit(fruitId) or FruitConfig.getFruit(FruitConfig.DEFAULT_FRUIT)
+
+	-- Determine which ability set to use (awakened or normal)
+	local isAwakened = stateData.Awakened
+	local effectiveFruit = FruitConfig.getEffectiveFruit(fruitId, isAwakened)
+	local abilities = effectiveFruit and effectiveFruit.Abilities
+
+	local primaryColor = fruit and fruit.PrimaryColor or Color3.fromRGB(255, 235, 100)
+	local secondaryColor = fruit and fruit.SecondaryColor or Color3.fromRGB(255, 200, 50)
 
 	for i = 1, 6 do
-		local slot = _create("Frame", {
-			Name = "Slot_" .. i,
-			Size = UDim2.new(0, 56, 0, 56),
-			BackgroundColor3 = Color3.fromRGB(15, 15, 35),
+		-- Wrapper frame to hold slot + ability name below
+		local wrapper = _create("Frame", {
+			Name = "SlotWrapper_" .. i,
+			Size = UDim2.new(0, 60, 0, 72),
+			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
 		}, container)
+
+		local slot = _create("Frame", {
+			Name = "Slot_" .. i,
+			Size = UDim2.new(1, 0, 0, 56),
+			Position = UDim2.new(0, 0, 0, 0),
+			BackgroundColor3 = Color3.fromRGB(12, 12, 30),
+			BorderSizePixel = 0,
+		}, wrapper)
 		_corner(slot, 8)
-		_stroke(slot, GOLD_DIM, 2, 0.4)
+		_stroke(slot, GOLD_DIM, 1.5, 0.4)
+
+		-- Subtle inner glow gradient
+		_gradient(slot, Color3.fromRGB(15, 15, 35), Color3.fromRGB(8, 8, 20), 180)
 
 		-- Key label (top-left)
-		_create("TextLabel", {
+		local keyBadge = _create("TextLabel", {
 			Name = "KeyLabel",
-			Size = UDim2.new(0, 18, 0, 16),
+			Size = UDim2.new(0, 18, 0, 15),
 			Position = UDim2.new(0, 2, 0, 2),
-			BackgroundColor3 = Color3.fromRGB(30, 30, 60),
-			BackgroundTransparency = 0.3,
+			BackgroundColor3 = Color3.fromRGB(25, 25, 50),
+			BackgroundTransparency = 0.2,
 			Text = keyLabels[i],
 			TextColor3 = GOLD,
-			TextSize = 11,
+			TextSize = 10,
 			Font = Enum.Font.GothamBold,
 			BorderSizePixel = 0,
 			ZIndex = 4,
 		}, slot)
-		_corner(slot:FindFirstChild("KeyLabel"), 3)
+		_corner(keyBadge, 3)
 
 		-- ViewportFrame for 3D icon
 		local vp = _create("ViewportFrame", {
@@ -456,25 +730,30 @@ function HudController.createAbilityBar()
 			Size = UDim2.new(1, -4, 1, -4),
 			Position = UDim2.new(0, 2, 0, 2),
 			BackgroundTransparency = 1,
-			Ambient = Color3.fromRGB(180, 180, 180),
-			LightColor = Color3.fromRGB(255, 235, 100),
+			Ambient = Color3.fromRGB(140, 140, 160),
+			LightColor = Color3.fromRGB(255, 245, 220),
 			LightDirection = Vector3.new(-1, -1, -1),
 		}, slot)
 
-		local iconPart = _create("Part", {
-			Shape = Enum.PartType.Ball,
-			Size = Vector3.new(2, 2, 2),
-			Material = Enum.Material.Neon,
-			Anchored = true,
-			CanCollide = false,
-			Color = fruit and fruit.PrimaryColor or Color3.fromRGB(255, 235, 100),
-			CFrame = CFrame.new(0, 0, -4),
-		}, vp)
+		-- Determine ability mode and build appropriate 3D shape
+		local abilityData = abilities and abilities[i]
+		local mode = abilityData and abilityData.Mode or nil
+		local builderFn = (mode and ShapeBuilders[mode]) or _buildDefaultIcon
+		local shapeParts = builderFn(primaryColor, secondaryColor)
 
+		-- Parent all parts into the ViewportFrame
+		for _, part in shapeParts do
+			part.Parent = vp
+		end
+
+		-- Camera for the viewport
 		local viewCam = _create("Camera", {
-			CFrame = CFrame.new(Vector3.new(0, 0, 0), Vector3.new(0, 0, -4)),
+			CFrame = CFrame.new(Vector3.new(0, 1, 5), Vector3.new(0, 0, 0)),
 		}, vp)
 		vp.CurrentCamera = viewCam
+
+		-- Store camera for rotation animation
+		table.insert(iconCameras, viewCam)
 
 		-- Cooldown overlay
 		local cdOverlay = _create("Frame", {
@@ -495,32 +774,34 @@ function HudController.createAbilityBar()
 			BackgroundTransparency = 1,
 			Text = "",
 			TextColor3 = WHITE,
-			TextSize = 16,
+			TextSize = 15,
 			Font = Enum.Font.GothamBold,
 			ZIndex = 5,
 			TextTransparency = 0.2,
 		}, slot)
 
-		-- Ability name below slot
-		local abilityData = fruit and fruit.Abilities and fruit.Abilities[i]
-		if abilityData then
-			_create("TextLabel", {
-				Name = "AbilityName",
-				Size = UDim2.new(1, 0, 0, 10),
-				Position = UDim2.new(0, 0, 1, 1),
-				BackgroundTransparency = 1,
-				Text = abilityData.Name,
-				TextColor3 = WHITE,
-				TextSize = 7,
-				Font = Enum.Font.Gotham,
-				TextTransparency = 0.4,
-			}, slot)
-		end
+		-- Ability name below the slot
+		local abilityName = abilityData and abilityData.Name or ""
+		_create("TextLabel", {
+			Name = "AbilityName",
+			Size = UDim2.new(1, 0, 0, 12),
+			Position = UDim2.new(0, 0, 0, 58),
+			BackgroundTransparency = 1,
+			Text = abilityName,
+			TextColor3 = WHITE,
+			TextSize = 8,
+			Font = Enum.Font.Gotham,
+			TextTransparency = 0.3,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+		}, wrapper)
 
 		abilitySlots[i] = slot
 		cooldownOverlays[i] = cdOverlay
 		cooldownLabels[i] = cdLabel
 	end
+
+	-- Start the rotation animation for all icon cameras
+	_startRotationAnimation()
 end
 
 -- ═══════════════════════════════════════════════════════════════
@@ -538,7 +819,7 @@ function HudController.createInfoPanel()
 		BorderSizePixel = 0,
 	}, screenGui)
 	_corner(panel, 10)
-	_stroke(panel, GOLD, 2, 0.5)
+	_stroke(panel, GOLD, 1.5, 0.5)
 	_gradient(panel, BG_PANEL, BG_PANEL2)
 
 	_create("UIPadding", {
@@ -612,12 +893,6 @@ function HudController.createCrosshair()
 	}, screenGui)
 
 	-- 4 lines forming a crosshair
-	local lineProps = {
-		BackgroundColor3 = WHITE,
-		BackgroundTransparency = 0.4,
-		BorderSizePixel = 0,
-	}
-
 	_create("Frame", { -- Top
 		Size = UDim2.new(0, 2, 0, 6),
 		Position = UDim2.new(0.5, -1, 0, 0),
@@ -648,7 +923,7 @@ function HudController.createGeppoDots()
 	geppoDotsContainer = _create("Frame", {
 		Name = "GeppoDots",
 		AnchorPoint = Vector2.new(0.5, 1),
-		Position = UDim2.new(0.5, 0, 1, -95),
+		Position = UDim2.new(0.5, 0, 1, -107),
 		Size = UDim2.new(0, Config.GEPPO_MAX_STEPS * 14, 0, 10),
 		BackgroundTransparency = 1,
 	}, screenGui)
@@ -974,6 +1249,19 @@ end
 
 function HudController.show()
 	if screenGui then screenGui.Enabled = true end
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- CLEANUP
+-- ═══════════════════════════════════════════════════════════════
+
+function HudController.cleanup()
+	if rotationConnection then
+		rotationConnection:Disconnect()
+		rotationConnection = nil
+	end
+	iconCameras = {}
+	iconModels = {}
 end
 
 return HudController

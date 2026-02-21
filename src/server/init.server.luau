@@ -89,6 +89,7 @@ local GachaService = safeRequire(script.GachaService)
 local DataService = safeRequire(script.DataService)
 local FruitService = safeRequire(script.FruitService)
 local TransformationService = safeRequire(script.TransformationService)
+local IslandBuilder = safeRequire(script.IslandBuilder)
 
 -- ═══════════════════════════════════════════════════════════════
 -- INIT SERVICES (order matters — PlayerStateService first)
@@ -101,6 +102,7 @@ safeInit(GachaService, "GachaService", PlayerStateService)
 safeInit(DataService, "DataService", PlayerStateService)
 safeInit(FruitService, "FruitService", PlayerStateService)
 safeInit(TransformationService, "TransformationService", PlayerStateService)
+safeInit(IslandBuilder, "IslandBuilder")
 
 -- ═══════════════════════════════════════════════════════════════
 -- REMOTE FUNCTION HANDLERS
